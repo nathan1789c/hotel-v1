@@ -356,6 +356,44 @@
         }
       },
       "required": ["uid", "email"]
+    },
+    "UserPermission": {
+      "title": "UserPermission",
+      "description": "Authorized Google account email and role (admin or staff) for hotel system access.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "staff"]
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "addedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "updatedBy": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "role", "addedBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -374,6 +412,10 @@
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminUser" },
       "description": "Admin role documents used by security rules."
+    },
+    "/permissions/{permissionEmail}": {
+      "schema": { "$ref": "#/entities/UserPermission" },
+      "description": "Authorized user access list and RBAC roles (admin or staff) keyed by lowercase email."
     }
   }
 }

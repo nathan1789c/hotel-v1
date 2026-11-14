@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -14,7 +15,15 @@ import {
 } from 'firebase/firestore';
 import { Booking, HotelSettings, Room } from '../types/hotel';
 import { DEFAULT_HOURLY_RATES, INITIAL_SETTINGS } from '../data/initialData';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import {
+  db,
+  handleFirestoreError,
+  isSuperAdminEmail,
+  normalizeEmail,
+  OperationType,
+  SUPER_ADMIN_EMAILS,
+  UserRole,
+} from './firebase';
 
 const workspaceCreatedAtMap = new Map<string, Timestamp>();
 const roomCreatedAtMap = new Map<string, Timestamp>();
@@ -600,3 +609,221 @@ export function subscribeWorkspace(
     unsubBookings();
   };
 }
+
+// ==================== Staff & Admin Permissions Management ====================
+
+export interface PermissionRecord {
+  email: string;
+  role: UserRole;
+  displayName?: string;
+  addedBy: string;
+  updatedBy?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+  isDefaultSuperAdmin: boolean;
+}
+
+const EMAIL_PATTERN = /^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/;
+
+export function isValidPermissionEmail(email: string): boolean {
+  const normalized = normalizeEmail(email);
+  return normalized.length >= 3 && normalized.length <= 150 && EMAIL_PATTERN.test(normalized);
+}
+
+export function subscribeMyPermission(
+  email: string,
+  callbacks: {
+    onResult: (role: UserRole | null) => void;
+    onError: (message: string) => void;
+  }
+): () => void {
+  const normalized = normalizeEmail(email);
+  if (!normalized || !isValidPermissionEmail(normalized)) {
+    callbacks.onResult(null);
+    return () => {};
+  }
+
+  const path = `permissions/${normalized}`;
+  return onSnapshot(
+    doc(db, 'permissions', normalized),
+    (snap) => {
+      if (!snap.exists()) {
+        callbacks.onResult(isSuperAdminEmail(normalized) ? 'admin' : null);
+        return;
+      }
+      const data = snap.data();
+      const role = data?.role === 'admin' ? 'admin' : data?.role === 'staff' ? 'staff' : null;
+      if (isSuperAdminEmail(normalized)) {
+        callbacks.onResult('admin');
+      } else {
+        callbacks.onResult(role);
+      }
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.GET, path);
+      } catch (e) {
+        callbacks.onError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  );
+}
+
+export async function ensureDefaultSuperAdminsInCloud(actorEmail: string): Promise<void> {
+  const safeActor = truncateStr(normalizeEmail(actorEmail) || 'system', 150);
+  for (const adminEmail of SUPER_ADMIN_EMAILS) {
+    const path = `permissions/${adminEmail}`;
+    const ref = doc(db, 'permissions', adminEmail);
+    try {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          email: adminEmail,
+          role: 'admin',
+          displayName: 'Admin Tối Cao (Mặc định)',
+          addedBy: safeActor,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+}
+
+export function subscribeAllPermissions(callbacks: {
+  onChange: (records: PermissionRecord[]) => void;
+  onError: (message: string) => void;
+}): () => void {
+  const path = 'permissions';
+  return onSnapshot(
+    collection(db, 'permissions'),
+    (snapshot) => {
+      const map = new Map<string, PermissionRecord>();
+
+      // Always include permanent default Super Admins first
+      SUPER_ADMIN_EMAILS.forEach((email) => {
+        map.set(email, {
+          email,
+          role: 'admin',
+          displayName: 'Admin Tối Cao (Mặc định)',
+          addedBy: 'Hệ thống',
+          isDefaultSuperAdmin: true,
+        });
+      });
+
+      snapshot.forEach((d) => {
+        const data = d.data();
+        const email = normalizeEmail(data?.email || d.id);
+        if (!email) return;
+        const isDefault = isSuperAdminEmail(email);
+        const createdAtTs = data?.createdAt instanceof Timestamp ? data.createdAt.toMillis() : undefined;
+        const updatedAtTs = data?.updatedAt instanceof Timestamp ? data.updatedAt.toMillis() : undefined;
+        map.set(email, {
+          email,
+          role: isDefault ? 'admin' : data?.role === 'admin' ? 'admin' : 'staff',
+          displayName: typeof data?.displayName === 'string' ? data.displayName : undefined,
+          addedBy: typeof data?.addedBy === 'string' ? data.addedBy : 'Admin',
+          updatedBy: typeof data?.updatedBy === 'string' ? data.updatedBy : undefined,
+          createdAtMs: createdAtTs,
+          updatedAtMs: updatedAtTs,
+          isDefaultSuperAdmin: isDefault,
+        });
+      });
+
+      const list = Array.from(map.values()).sort((a, b) => {
+        if (a.isDefaultSuperAdmin !== b.isDefaultSuperAdmin) {
+          return a.isDefaultSuperAdmin ? -1 : 1;
+        }
+        if (a.role !== b.role) {
+          return a.role === 'admin' ? -1 : 1;
+        }
+        return a.email.localeCompare(b.email);
+      });
+
+      callbacks.onChange(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (e) {
+        callbacks.onError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  );
+}
+
+export async function grantOrUpdateUserPermission(params: {
+  email: string;
+  role: UserRole;
+  displayName?: string;
+  actorEmail: string;
+}): Promise<void> {
+  const normalized = normalizeEmail(params.email);
+  if (!isValidPermissionEmail(normalized)) {
+    throw new Error('Địa chỉ email không hợp lệ. Vui lòng nhập đúng định dạng Gmail/email.');
+  }
+  if (isSuperAdminEmail(normalized)) {
+    throw new Error('Tài khoản Admin tối cao mặc định luôn có toàn quyền và không thể thay đổi.');
+  }
+
+  const path = `permissions/${normalized}`;
+  const ref = doc(db, 'permissions', normalized);
+  const actor = truncateStr(normalizeEmail(params.actorEmail) || 'admin', 150);
+  const cleanDisplayName = truncateStr((params.displayName || '').trim(), 100);
+
+  let existingAddedBy = actor;
+  let existingCreatedAt: Timestamp | ReturnType<typeof serverTimestamp> = serverTimestamp();
+
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (typeof data?.addedBy === 'string' && data.addedBy.length > 0) {
+        existingAddedBy = data.addedBy;
+      }
+      if (data?.createdAt instanceof Timestamp) {
+        existingCreatedAt = data.createdAt;
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  const payload: Record<string, unknown> = {
+    email: normalized,
+    role: params.role === 'admin' ? 'admin' : 'staff',
+    addedBy: existingAddedBy,
+    updatedBy: actor,
+    createdAt: existingCreatedAt,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cleanDisplayName) {
+    payload.displayName = cleanDisplayName;
+  }
+
+  try {
+    await setDoc(ref, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function revokeUserPermission(email: string): Promise<void> {
+  const normalized = normalizeEmail(email);
+  if (!isValidPermissionEmail(normalized)) {
+    throw new Error('Địa chỉ email không hợp lệ.');
+  }
+  if (isSuperAdminEmail(normalized)) {
+    throw new Error('Không thể xóa tài khoản Admin tối cao mặc định.');
+  }
+  const path = `permissions/${normalized}`;
+  try {
+    await deleteDoc(doc(db, 'permissions', normalized));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

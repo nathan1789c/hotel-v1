@@ -12,11 +12,14 @@ import {
   LogOut,
   Shield,
   UserCheck,
+  Users,
 } from 'lucide-react';
 
+export type AppView = 'rooms' | 'ota' | 'bookings' | 'analytics' | 'permissions';
+
 interface HeaderProps {
-  currentView: 'rooms' | 'ota' | 'bookings' | 'analytics';
-  onChangeView: (view: 'rooms' | 'ota' | 'bookings' | 'analytics') => void;
+  currentView: AppView;
+  onChangeView: (view: AppView) => void;
   settings: HotelSettings;
   rooms: Room[];
   userRole: UserRole;
@@ -242,6 +245,21 @@ export default function Header({
             >
               <BarChart3 className="w-3.5 h-3.5" />
               Báo Cáo Doanh Thu
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => onChangeView('permissions')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                currentView === 'permissions'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              Quản Lý Nhân Sự
             </button>
           )}
         </div>

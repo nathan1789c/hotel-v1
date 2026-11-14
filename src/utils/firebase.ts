@@ -12,21 +12,31 @@ import firebaseConfig from '../../firebase-applet-config.json';
 
 export const SHARED_HOTEL_ID = 'hotel-thai-ha-huy-25';
 
-export const ADMIN_EMAILS = [
+export const SUPER_ADMIN_EMAILS = [
   'nathan.bui1789@gmail.com',
   'thaihahuyhotel.com@gmail.com',
 ] as const;
 
+export const ADMIN_EMAILS = SUPER_ADMIN_EMAILS;
+
 export type UserRole = 'admin' | 'staff';
 
+export function normalizeEmail(email?: string | null): string {
+  return (email || '').trim().toLowerCase();
+}
+
+export function isSuperAdminEmail(email?: string | null): boolean {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  return (SUPER_ADMIN_EMAILS as readonly string[]).includes(normalized);
+}
+
 export function isAdminEmail(email?: string | null): boolean {
-  if (!email) return false;
-  const normalized = email.trim().toLowerCase();
-  return (ADMIN_EMAILS as readonly string[]).includes(normalized);
+  return isSuperAdminEmail(email);
 }
 
 export function getUserRole(email?: string | null): UserRole {
-  return isAdminEmail(email) ? 'admin' : 'staff';
+  return isSuperAdminEmail(email) ? 'admin' : 'staff';
 }
 
 const app = initializeApp(firebaseConfig);

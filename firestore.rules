@@ -11,6 +11,13 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidEmailId(email) {
+      return email is string &&
+        email.size() >= 3 &&
+        email.size() <= 150 &&
+        email.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -27,18 +34,68 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    function isAdmin() {
-      return isVerified() && (
-        (request.auth.token.email is string && request.auth.token.email.lower() in [
+    function isSuperAdmin() {
+      return isVerified() &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() in [
           'nathan.bui1789@gmail.com',
           'thaihahuyhotel.com@gmail.com'
-        ]) ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        ];
+    }
+
+    function isPermissionAdmin() {
+      return isVerified() &&
+        request.auth.token.email is string &&
+        isValidEmailId(request.auth.token.email.lower()) &&
+        exists(/databases/$(database)/documents/permissions/$(request.auth.token.email.lower())) &&
+        get(/databases/$(database)/documents/permissions/$(request.auth.token.email.lower())).data.role == 'admin';
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() ||
+        isPermissionAdmin() ||
+        (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isAuthorizedUser() {
+      return isSuperAdmin() || (
+        isVerified() &&
+        request.auth.token.email is string &&
+        isValidEmailId(request.auth.token.email.lower()) &&
+        exists(/databases/$(database)/documents/permissions/$(request.auth.token.email.lower())) &&
+        get(/databases/$(database)/documents/permissions/$(request.auth.token.email.lower())).data.role in ['admin', 'staff']
       );
     }
 
     function isSharedWorkspace(hotelId) {
       return hotelId == 'hotel-thai-ha-huy-25';
+    }
+
+    function isValidPermission(data, permissionEmail) {
+      return data.keys().hasAll([
+        'email',
+        'role',
+        'addedBy',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'email',
+        'role',
+        'displayName',
+        'addedBy',
+        'updatedBy',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidEmailId(data.email) &&
+      data.email == permissionEmail &&
+      data.role in ['admin', 'staff'] &&
+      (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100)) &&
+      data.addedBy is string && data.addedBy.size() >= 1 && data.addedBy.size() <= 150 &&
+      (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 150)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
     }
 
     function isValidHotelWorkspace(data, hotelId) {
@@ -249,15 +306,55 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Staff & Admin permissions directory (keyed by normalized lowercase email)
+    match /permissions/{permissionEmail} {
+      // Users can read only their own permission doc; Admins can read any permission doc
+      allow get: if isValidEmailId(permissionEmail) &&
+        isVerified() &&
+        (isAdmin() || (request.auth.token.email is string && request.auth.token.email.lower() == permissionEmail));
+
+      // Only Admins can list all authorized staff/admin accounts
+      allow list: if isAdmin() && resource.data.email is string;
+
+      // Only Admins can add authorized users; Super Admins cannot be created as non-admin
+      allow create: if isValidEmailId(permissionEmail) &&
+        isAdmin() &&
+        isValidPermission(incoming(), permissionEmail) &&
+        (!(permissionEmail in ['nathan.bui1789@gmail.com', 'thaihahuyhotel.com@gmail.com']) || incoming().role == 'admin') &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      // Only Admins can update non-super-admin accounts
+      allow update: if isValidEmailId(permissionEmail) &&
+        isAdmin() &&
+        !(permissionEmail in ['nathan.bui1789@gmail.com', 'thaihahuyhotel.com@gmail.com']) &&
+        isValidPermission(incoming(), permissionEmail) &&
+        incoming().email == existing().email &&
+        incoming().addedBy == existing().addedBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'role',
+          'displayName',
+          'updatedBy',
+          'updatedAt'
+        ]);
+
+      // Only Admins can revoke/delete accounts, and default Super Admins can never be deleted
+      allow delete: if isValidEmailId(permissionEmail) &&
+        isAdmin() &&
+        !(permissionEmail in ['nathan.bui1789@gmail.com', 'thaihahuyhotel.com@gmail.com']);
+    }
+
     match /hotels/{hotelId} {
       allow get: if isValidId(hotelId) &&
-        isVerified() &&
+        isAuthorizedUser() &&
         isSharedWorkspace(hotelId) &&
         (resource == null || existing().ownerUid == hotelId);
-      allow list: if isVerified() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
+      allow list: if isAuthorizedUser() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
       allow create: if isValidId(hotelId) &&
-        isVerified() &&
+        isAuthorizedUser() &&
         isSharedWorkspace(hotelId) &&
         isValidHotelWorkspace(incoming(), hotelId) &&
         incoming().serverCreatedAt == request.time &&
@@ -290,14 +387,14 @@ service cloud.firestore {
       match /rooms/{roomId} {
         allow get: if isValidId(hotelId) &&
           isValidId(roomId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           (resource == null || existing().ownerUid == hotelId);
-        allow list: if isVerified() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
+        allow list: if isAuthorizedUser() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
         allow create: if isValidId(hotelId) &&
           isValidId(roomId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
           isValidRoom(incoming(), hotelId, roomId) &&
@@ -307,7 +404,7 @@ service cloud.firestore {
         // Tiered update: Staff may update operational room statuses only; Admins may also edit room pricing & configuration
         allow update: if isValidId(hotelId) &&
           isValidId(roomId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
           isValidRoom(incoming(), hotelId, roomId) &&
@@ -348,14 +445,14 @@ service cloud.firestore {
       match /bookings/{bookingId} {
         allow get: if isValidId(hotelId) &&
           isValidId(bookingId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           (resource == null || existing().ownerUid == hotelId);
-        allow list: if isVerified() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
+        allow list: if isAuthorizedUser() && isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
         allow create: if isValidId(hotelId) &&
           isValidId(bookingId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           exists(/databases/$(database)/documents/hotels/$(hotelId)/rooms/$(incoming().roomId)) &&
           isValidBooking(incoming(), hotelId, bookingId) &&
@@ -364,7 +461,7 @@ service cloud.firestore {
 
         allow update: if isValidId(hotelId) &&
           isValidId(bookingId) &&
-          isVerified() &&
+          isAuthorizedUser() &&
           isSharedWorkspace(hotelId) &&
           isValidBooking(incoming(), hotelId, bookingId) &&
           incoming().ownerUid == existing().ownerUid &&

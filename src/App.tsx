@@ -3,10 +3,18 @@ import { User } from 'firebase/auth';
 import { Room, Booking, HotelSettings, RoomStatus, BookingServiceItem } from './types/hotel';
 import { loadStoredData, saveStoredData, resetToDefaults } from './utils/storage';
 import { addDaysToDateStr, getMonthBounds, getMonthKey } from './utils/pricing';
-import { getUserRole, initAuth, logout, SHARED_HOTEL_ID } from './utils/firebase';
+import {
+  initAuth,
+  isSuperAdminEmail,
+  logout,
+  SHARED_HOTEL_ID,
+  UserRole,
+} from './utils/firebase';
 import {
   ensureCloudWorkspaceInitialized,
+  ensureDefaultSuperAdminsInCloud,
   pushAllLocalDataToCloud,
+  subscribeMyPermission,
   subscribeWorkspace,
   syncBookingAndRoomsToCloud,
   syncBookingToCloud,
@@ -14,11 +22,12 @@ import {
   syncWorkspaceSettingsToCloud,
 } from './utils/firestoreSync';
 import LoginLockScreen from './components/LoginLockScreen';
-import Header from './components/Header';
+import Header, { AppView } from './components/Header';
 import RoomGrid from './components/RoomGrid';
 import OtaPricingCalculator from './components/OtaPricingCalculator';
 import BookingList from './components/BookingList';
 import AnalyticsView from './components/AnalyticsView';
+import StaffPermissionsView from './components/StaffPermissionsView';
 import BookingModal from './components/BookingModal';
 import CheckoutModal, { CheckoutUpdatePayload } from './components/CheckoutModal';
 import RoomDetailModal from './components/RoomDetailModal';
@@ -31,12 +40,16 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  const [permissionChecked, setPermissionChecked] = useState(false);
+  const [authorizedRole, setAuthorizedRole] = useState<UserRole | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+
   const [dataLoaded, setDataLoaded] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [settings, setSettings] = useState<HotelSettings>({} as HotelSettings);
 
-  const [currentView, setCurrentView] = useState<'rooms' | 'ota' | 'bookings' | 'analytics'>('rooms');
+  const [currentView, setCurrentView] = useState<AppView>('rooms');
   const [selectedGridMonth, setSelectedGridMonth] = useState<string>(() => getMonthKey(''));
 
   // Shared Firebase Cloud Sync State
@@ -73,8 +86,8 @@ export default function App() {
 
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
-  const userRole = getUserRole(authUser?.email);
-  const isAdmin = userRole === 'admin';
+  const userRole: UserRole = authorizedRole === 'admin' ? 'admin' : 'staff';
+  const isAdmin = authorizedRole === 'admin';
 
   // Mandatory Google Auth listener
   useEffect(() => {
@@ -89,6 +102,9 @@ export default function App() {
       setAuthReady(true);
 
       if (!user) {
+        setPermissionChecked(false);
+        setAuthorizedRole(null);
+        setPermissionError(null);
         setCurrentView('rooms');
         setIsSettingsModalOpen(false);
         setIsSyncModalOpen(false);
@@ -102,10 +118,53 @@ export default function App() {
     return () => unsubAuth();
   }, []);
 
+  // Verify signed-in user against Firestore permissions collection (real-time)
+  useEffect(() => {
+    if (!authReady || !authUser) return;
+
+    const userEmail = authUser.email || '';
+    setPermissionError(null);
+
+    if (isSuperAdminEmail(userEmail)) {
+      setAuthorizedRole('admin');
+      setPermissionChecked(true);
+      ensureDefaultSuperAdminsInCloud(userEmail).catch((err) => {
+        console.error('Could not seed default super admins in permissions:', err);
+      });
+      return;
+    }
+
+    setPermissionChecked(false);
+    setAuthorizedRole(null);
+
+    const unsubPerm = subscribeMyPermission(userEmail, {
+      onResult: (role) => {
+        setAuthorizedRole(role);
+        setPermissionChecked(true);
+        if (!role) {
+          setIsCloudConnected(false);
+          setDataLoaded(false);
+          setRooms([]);
+          setBookings([]);
+          setCurrentView('rooms');
+          setIsSettingsModalOpen(false);
+          setIsSyncModalOpen(false);
+        }
+      },
+      onError: (msg) => {
+        setPermissionError(msg);
+        setAuthorizedRole(null);
+        setPermissionChecked(true);
+      },
+    });
+
+    return () => unsubPerm();
+  }, [authReady, authUser?.uid, authUser?.email]);
+
   // Force-guard Staff away from Admin-only views and Settings modal
   useEffect(() => {
     if (!isAdmin) {
-      if (currentView === 'ota' || currentView === 'analytics') {
+      if (currentView === 'ota' || currentView === 'analytics' || currentView === 'permissions') {
         setCurrentView('rooms');
       }
       if (isSettingsModalOpen) {
@@ -114,26 +173,26 @@ export default function App() {
     }
   }, [isAdmin, currentView, isSettingsModalOpen]);
 
-  // Load initial/cached hotel data only AFTER authentication succeeds
+  // Load initial/cached hotel data only AFTER authentication + authorization succeed
   useEffect(() => {
-    if (!authReady || !authUser) return;
+    if (!authReady || !authUser || !permissionChecked || !authorizedRole) return;
     const data = loadStoredData();
     setRooms(data.rooms);
     setBookings(data.bookings);
     setSettings(data.settings);
     setDataLoaded(true);
-  }, [authReady, authUser?.uid]);
+  }, [authReady, authUser?.uid, permissionChecked, authorizedRole]);
 
-  // Save data on changes to localStorage cache (only when authenticated & loaded)
+  // Save data on changes to localStorage cache (only when authenticated & authorized & loaded)
   useEffect(() => {
-    if (authUser && dataLoaded) {
+    if (authUser && authorizedRole && dataLoaded) {
       saveStoredData(rooms, bookings, settings);
     }
-  }, [authUser, rooms, bookings, settings, dataLoaded]);
+  }, [authUser, authorizedRole, rooms, bookings, settings, dataLoaded]);
 
-  // Connect & subscribe to shared Firestore workspace ONLY when authenticated
+  // Connect & subscribe to shared Firestore workspace ONLY when authenticated & authorized
   useEffect(() => {
-    if (!authReady || !authUser || !dataLoaded) return;
+    if (!authReady || !authUser || !permissionChecked || !authorizedRole || !dataLoaded) return;
 
     let active = true;
     let unsubFirestore: (() => void) | null = null;
@@ -181,7 +240,7 @@ export default function App() {
       active = false;
       if (unsubFirestore) unsubFirestore();
     };
-  }, [authReady, authUser?.uid, dataLoaded, syncRetryTick]);
+  }, [authReady, authUser?.uid, permissionChecked, authorizedRole, dataLoaded, syncRetryTick]);
 
   // 1. Auth checking splash (no internal hotel data rendered)
   if (!authReady) {
@@ -197,7 +256,29 @@ export default function App() {
     return <LoginLockScreen externalError={authError} />;
   }
 
-  // 3. Loading workspace data after login
+  // 3. Checking Firestore permissions list before allowing access
+  if (!permissionChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-300 text-sm">
+        Đang kiểm tra quyền truy cập tài khoản...
+      </div>
+    );
+  }
+
+  // 4. Reject accounts not found in Firestore permissions collection
+  if (!authorizedRole) {
+    return (
+      <LoginLockScreen
+        externalError={permissionError}
+        accessDeniedEmail={authUser.email || 'Tài khoản Google'}
+        onSignOut={() => {
+          logout().catch((err) => setPermissionError(err instanceof Error ? err.message : String(err)));
+        }}
+      />
+    );
+  }
+
+  // 5. Loading workspace data after login & permission check
   if (!dataLoaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 text-sm">
@@ -695,7 +776,7 @@ export default function App() {
       <Header
         currentView={currentView}
         onChangeView={(view) => {
-          if (!isAdmin && (view === 'ota' || view === 'analytics')) return;
+          if (!isAdmin && (view === 'ota' || view === 'analytics' || view === 'permissions')) return;
           setCurrentView(view);
         }}
         settings={settings}
@@ -792,6 +873,10 @@ export default function App() {
             rooms={rooms}
             settings={settings}
           />
+        )}
+
+        {isAdmin && currentView === 'permissions' && (
+          <StaffPermissionsView currentUserEmail={authUser.email || ''} />
         )}
       </main>
 
