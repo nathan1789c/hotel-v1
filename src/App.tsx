@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
+import { User } from 'firebase/auth';
 import { Room, Booking, HotelSettings, RoomStatus, BookingServiceItem } from './types/hotel';
 import { loadStoredData, saveStoredData, resetToDefaults } from './utils/storage';
 import { addDaysToDateStr, getMonthBounds, getMonthKey } from './utils/pricing';
-import { SHARED_HOTEL_ID } from './utils/firebase';
+import { getUserRole, initAuth, logout, SHARED_HOTEL_ID } from './utils/firebase';
 import {
   ensureCloudWorkspaceInitialized,
   pushAllLocalDataToCloud,
@@ -12,6 +13,7 @@ import {
   syncRoomsToCloud,
   syncWorkspaceSettingsToCloud,
 } from './utils/firestoreSync';
+import LoginLockScreen from './components/LoginLockScreen';
 import Header from './components/Header';
 import RoomGrid from './components/RoomGrid';
 import OtaPricingCalculator from './components/OtaPricingCalculator';
@@ -25,6 +27,10 @@ import ExtendStayModal, { ExtendStayPayload } from './components/ExtendStayModal
 import SyncExportModal from './components/SyncExportModal';
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const [dataLoaded, setDataLoaded] = useState(false);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -33,7 +39,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'rooms' | 'ota' | 'bookings' | 'analytics'>('rooms');
   const [selectedGridMonth, setSelectedGridMonth] = useState<string>(() => getMonthKey(''));
 
-  // Always-on Shared Firebase Cloud Sync State
+  // Shared Firebase Cloud Sync State
   const [isCloudConnected, setIsCloudConnected] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
@@ -67,25 +73,67 @@ export default function App() {
 
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
-  // Load data on mount
+  const userRole = getUserRole(authUser?.email);
+  const isAdmin = userRole === 'admin';
+
+  // Mandatory Google Auth listener
   useEffect(() => {
+    const unsubAuth = initAuth((user) => {
+      if (user && !user.emailVerified) {
+        setAuthError('Tài khoản Google chưa xác minh email. Vui lòng sử dụng Gmail đã xác minh.');
+        setAuthUser(null);
+      } else {
+        setAuthError(null);
+        setAuthUser(user);
+      }
+      setAuthReady(true);
+
+      if (!user) {
+        setCurrentView('rooms');
+        setIsSettingsModalOpen(false);
+        setIsSyncModalOpen(false);
+        setIsCloudConnected(false);
+        setCloudError(null);
+        setDataLoaded(false);
+        setRooms([]);
+        setBookings([]);
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Force-guard Staff away from Admin-only views and Settings modal
+  useEffect(() => {
+    if (!isAdmin) {
+      if (currentView === 'ota' || currentView === 'analytics') {
+        setCurrentView('rooms');
+      }
+      if (isSettingsModalOpen) {
+        setIsSettingsModalOpen(false);
+      }
+    }
+  }, [isAdmin, currentView, isSettingsModalOpen]);
+
+  // Load initial/cached hotel data only AFTER authentication succeeds
+  useEffect(() => {
+    if (!authReady || !authUser) return;
     const data = loadStoredData();
     setRooms(data.rooms);
     setBookings(data.bookings);
     setSettings(data.settings);
     setDataLoaded(true);
-  }, []);
+  }, [authReady, authUser?.uid]);
 
-  // Save data on changes to localStorage cache
+  // Save data on changes to localStorage cache (only when authenticated & loaded)
   useEffect(() => {
-    if (dataLoaded) {
+    if (authUser && dataLoaded) {
       saveStoredData(rooms, bookings, settings);
     }
-  }, [rooms, bookings, settings, dataLoaded]);
+  }, [authUser, rooms, bookings, settings, dataLoaded]);
 
-  // Immediately connect & subscribe to shared Firestore workspace on boot (no login required)
+  // Connect & subscribe to shared Firestore workspace ONLY when authenticated
   useEffect(() => {
-    if (!dataLoaded) return;
+    if (!authReady || !authUser || !dataLoaded) return;
 
     let active = true;
     let unsubFirestore: (() => void) | null = null;
@@ -133,12 +181,27 @@ export default function App() {
       active = false;
       if (unsubFirestore) unsubFirestore();
     };
-  }, [dataLoaded, syncRetryTick]);
+  }, [authReady, authUser?.uid, dataLoaded, syncRetryTick]);
 
+  // 1. Auth checking splash (no internal hotel data rendered)
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-300 text-sm">
+        Đang kiểm tra phiên đăng nhập Google...
+      </div>
+    );
+  }
+
+  // 2. Mandatory Google Login Lock Screen (blocks 100% of hotel data & rooms)
+  if (!authUser) {
+    return <LoginLockScreen externalError={authError} />;
+  }
+
+  // 3. Loading workspace data after login
   if (!dataLoaded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 text-sm">
-        Đang khởi động hệ thống quản lý khách sạn 25 phòng...
+        Đang tải dữ liệu khách sạn 25 phòng...
       </div>
     );
   }
@@ -225,6 +288,7 @@ export default function App() {
   };
 
   const handlePushLocalToCloud = async () => {
+    if (!isAdmin) return;
     setIsSyncingCloud(true);
     try {
       await pushAllLocalDataToCloud(SHARED_HOTEL_ID, rooms, bookings, settings);
@@ -236,11 +300,13 @@ export default function App() {
   };
 
   const handleUpdateSettings = (updatedSettings: HotelSettings) => {
+    if (!isAdmin) return;
     setSettings(updatedSettings);
     syncWorkspaceSettingsToCloud(SHARED_HOTEL_ID, updatedSettings).catch(reportCloudError);
   };
 
   const handleUpdateRooms = (updatedRooms: Room[]) => {
+    if (!isAdmin) return;
     setRooms(updatedRooms);
     syncRoomsToCloud(SHARED_HOTEL_ID, updatedRooms).catch(reportCloudError);
   };
@@ -576,6 +642,7 @@ export default function App() {
   };
 
   const handleResetDefaults = () => {
+    if (!isAdmin) return;
     const data = resetToDefaults();
     setRooms(data.rooms);
     setBookings(data.bookings);
@@ -627,13 +694,23 @@ export default function App() {
       {/* Top Application Header */}
       <Header
         currentView={currentView}
-        onChangeView={setCurrentView}
+        onChangeView={(view) => {
+          if (!isAdmin && (view === 'ota' || view === 'analytics')) return;
+          setCurrentView(view);
+        }}
         settings={settings}
         rooms={rooms}
+        userRole={userRole}
+        userEmail={authUser.email || ''}
+        onSignOut={() => {
+          logout().catch(reportCloudError);
+        }}
         isCloudConnected={isCloudConnected}
         isSyncingCloud={isSyncingCloud}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
-        onOpenSettings={() => setIsSettingsModalOpen(true)}
+        onOpenSettings={() => {
+          if (isAdmin) setIsSettingsModalOpen(true);
+        }}
       />
 
       {/* Main Content Area */}
@@ -683,7 +760,7 @@ export default function App() {
           />
         )}
 
-        {currentView === 'ota' && (
+        {isAdmin && currentView === 'ota' && (
           <OtaPricingCalculator
             settings={settings}
             onUpdateSettings={handleUpdateSettings}
@@ -695,6 +772,7 @@ export default function App() {
             bookings={bookings}
             rooms={rooms}
             settings={settings}
+            isAdmin={isAdmin}
             onOpenCheckoutModal={handleOpenCheckoutModal}
             onOpenExtendModal={handleOpenExtendModal}
             onOpenEditBookingModal={handleOpenEditBookingModal}
@@ -708,7 +786,7 @@ export default function App() {
           />
         )}
 
-        {currentView === 'analytics' && (
+        {isAdmin && currentView === 'analytics' && (
           <AnalyticsView
             bookings={bookings}
             rooms={rooms}
@@ -738,6 +816,7 @@ export default function App() {
         roomBookings={currentRoomAllBookings}
         selectedMonth={currentView === 'rooms' ? selectedGridMonth : undefined}
         settings={settings}
+        isAdmin={isAdmin}
         onUpdateRoomStatus={handleQuickSetStatus}
         onAddServiceToBooking={handleAddServiceToBooking}
         onRemoveServiceFromBooking={handleRemoveServiceFromBooking}
@@ -784,19 +863,22 @@ export default function App() {
         onConfirmExtend={handleConfirmExtend}
       />
 
-      <SettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        settings={settings}
-        rooms={rooms}
-        onSaveSettings={handleUpdateSettings}
-        onUpdateRooms={handleUpdateRooms}
-        onResetDefaults={handleResetDefaults}
-      />
+      {isAdmin && (
+        <SettingsModal
+          isOpen={isSettingsModalOpen}
+          onClose={() => setIsSettingsModalOpen(false)}
+          settings={settings}
+          rooms={rooms}
+          onSaveSettings={handleUpdateSettings}
+          onUpdateRooms={handleUpdateRooms}
+          onResetDefaults={handleResetDefaults}
+        />
+      )}
 
       <SyncExportModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
+        isAdmin={isAdmin}
         isCloudConnected={isCloudConnected}
         isSyncingCloud={isSyncingCloud}
         cloudError={cloudError}

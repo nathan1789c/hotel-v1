@@ -20,6 +20,7 @@ interface BookingListProps {
   bookings: Booking[];
   rooms: Room[];
   settings: HotelSettings;
+  isAdmin?: boolean;
   onOpenCheckoutModal: (booking: Booking, room: Room) => void;
   onOpenExtendModal: (booking: Booking, room: Room) => void;
   onOpenEditBookingModal: (booking: Booking) => void;
@@ -32,6 +33,7 @@ interface BookingListProps {
 export default function BookingList({
   bookings,
   rooms,
+  isAdmin = false,
   onOpenCheckoutModal,
   onOpenExtendModal,
   onOpenEditBookingModal,
@@ -395,8 +397,8 @@ export default function BookingList({
               </h3>
               <p className="text-[11px] text-slate-500">
                 {selectedMonth === 'all'
-                  ? `Đang xem tất cả các tháng (${monthBookings.length} đơn • Doanh thu phát sinh: ${formatVND(monthActiveRevenue)})`
-                  : `Đang lọc ${formatMonthLabel(selectedMonth)}: ${monthBookings.length} đơn • Doanh thu phát sinh: ${formatVND(monthActiveRevenue)}`}
+                  ? `Đang xem tất cả các tháng (${monthBookings.length} đơn${isAdmin ? ` • Doanh thu phát sinh: ${formatVND(monthActiveRevenue)}` : ''})`
+                  : `Đang lọc ${formatMonthLabel(selectedMonth)}: ${monthBookings.length} đơn${isAdmin ? ` • Doanh thu phát sinh: ${formatVND(monthActiveRevenue)}` : ''}`}
               </p>
             </div>
           </div>
@@ -583,10 +585,12 @@ export default function BookingList({
                       ({nightsInMonth} đêm{hourlyInMonth > 0 ? ` · ${hourlyInMonth} lượt giờ` : ''})
                     </span>
                   </div>
-                  <div className="text-xs font-semibold text-slate-600">
-                    Doanh thu tháng:{' '}
-                    <span className="font-black text-emerald-700 text-sm">{formatVND(totalInMonth)}</span>
-                  </div>
+                  {isAdmin && (
+                    <div className="text-xs font-semibold text-slate-600">
+                      Doanh thu tháng:{' '}
+                      <span className="font-black text-emerald-700 text-sm">{formatVND(totalInMonth)}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="overflow-x-auto">

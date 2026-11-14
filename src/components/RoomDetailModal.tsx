@@ -32,6 +32,7 @@ interface RoomDetailModalProps {
   roomBookings?: Booking[];
   selectedMonth?: string;
   settings: HotelSettings;
+  isAdmin?: boolean;
   onUpdateRoomStatus: (roomId: string, status: RoomStatus, cleaningNote?: string) => void;
   onAddServiceToBooking: (bookingId: string, item: BookingServiceItem) => void;
   onRemoveServiceFromBooking: (bookingId: string, serviceId: string) => void;
@@ -51,6 +52,7 @@ export default function RoomDetailModal({
   roomBookings = [],
   selectedMonth,
   settings,
+  isAdmin = false,
   onUpdateRoomStatus,
   onAddServiceToBooking,
   onRemoveServiceFromBooking,
@@ -620,11 +622,13 @@ export default function RoomDetailModal({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                Bảng Giá Niêm Yết Của Phòng {room.number}
+                {isAdmin ? `Bảng Giá Niêm Yết Của Phòng ${room.number}` : `Giá Phòng Tiêu Chuẩn — Phòng ${room.number}`}
               </h4>
-              <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                +150k phí quản lý sau trừ % sàn
-              </span>
+              {isAdmin && (
+                <span className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  +150k phí quản lý sau trừ % sàn
+                </span>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
@@ -632,11 +636,11 @@ export default function RoomDetailModal({
               <div className="p-3 bg-emerald-50/60 rounded-lg border border-emerald-200 flex items-center justify-between">
                 <div>
                   <span className="font-bold text-emerald-900 block">Đặt Trực Tiếp (Qua đêm)</span>
-                  <span className="text-[10px] text-emerald-700">0% hoa hồng</span>
+                  {isAdmin && <span className="text-[10px] text-emerald-700">0% hoa hồng</span>}
                 </div>
                 <div className="text-right">
                   <span className="font-extrabold text-emerald-700 text-sm">{formatVND(room.directPrice)}</span>
-                  <span className="text-[10px] text-emerald-600 block">Thực nhận 100%</span>
+                  {isAdmin && <span className="text-[10px] text-emerald-600 block">Thực nhận 100%</span>}
                 </div>
               </div>
 
@@ -659,49 +663,50 @@ export default function RoomDetailModal({
                 </div>
               </div>
 
-              {/* OTAs */}
-              {(['agoda', 'booking', 'trip', 'airbnb'] as const).map((ch) => {
-                const chInfo = CHANNELS[ch];
-                const rate = settings.channelCommissions[ch] ?? 0.15;
-                const breakdown = calculateOtaPrice(
-                  room.directPrice,
-                  ch,
-                  rate,
-                  settings.defaultManagementFee,
-                  settings.pricingFormula,
-                  settings.roundingMethod
-                );
+              {/* OTAs (Admin only) */}
+              {isAdmin &&
+                (['agoda', 'booking', 'trip', 'airbnb'] as const).map((ch) => {
+                  const chInfo = CHANNELS[ch];
+                  const rate = settings.channelCommissions[ch] ?? 0.15;
+                  const breakdown = calculateOtaPrice(
+                    room.directPrice,
+                    ch,
+                    rate,
+                    settings.defaultManagementFee,
+                    settings.pricingFormula,
+                    settings.roundingMethod
+                  );
 
-                return (
-                  <div key={ch} className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between">
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${chInfo.bgColor}`}>
-                          {chInfo.name}
+                  return (
+                    <div key={ch} className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${chInfo.bgColor}`}>
+                            {chInfo.name}
+                          </span>
+                          <span className="text-[10px] text-slate-400">-{Math.round(rate * 100)}%</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 block mt-0.5">
+                          Thực nhận: <strong className="text-emerald-700">{formatVND(breakdown.netPayout)}</strong>
                         </span>
-                        <span className="text-[10px] text-slate-400">-{Math.round(rate * 100)}%</span>
                       </div>
-                      <span className="text-[10px] text-slate-500 block mt-0.5">
-                        Thực nhận: <strong className="text-emerald-700">{formatVND(breakdown.netPayout)}</strong>
-                      </span>
-                    </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <div className="text-right">
-                        <span className="font-bold text-slate-900 text-sm">{formatVND(breakdown.listedPrice)}</span>
-                        <span className="text-[10px] text-slate-400 block">Niêm yết</span>
+                      <div className="flex items-center gap-1.5">
+                        <div className="text-right">
+                          <span className="font-bold text-slate-900 text-sm">{formatVND(breakdown.listedPrice)}</span>
+                          <span className="text-[10px] text-slate-400 block">Niêm yết</span>
+                        </div>
+                        <button
+                          onClick={() => handleCopy(breakdown.listedPrice.toString(), `room-${ch}`)}
+                          className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-indigo-600"
+                          title="Sao chép"
+                        >
+                          {copiedKey === `room-${ch}` ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
                       </div>
-                      <button
-                        onClick={() => handleCopy(breakdown.listedPrice.toString(), `room-${ch}`)}
-                        className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-indigo-600"
-                        title="Sao chép"
-                      >
-                        {copiedKey === `room-${ch}` ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                      </button>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
           </div>
         </div>
