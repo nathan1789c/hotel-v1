@@ -698,7 +698,7 @@ export function subscribeAllPermissions(callbacks: {
 }): () => void {
   const path = 'permissions';
   return onSnapshot(
-    collection(db, 'permissions'),
+    query(collection(db, 'permissions'), where('email', '>', '')),
     (snapshot) => {
       const map = new Map<string, PermissionRecord>();
 

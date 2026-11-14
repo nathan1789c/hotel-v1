@@ -313,8 +313,8 @@ service cloud.firestore {
         isVerified() &&
         (isAdmin() || (request.auth.token.email is string && request.auth.token.email.lower() == permissionEmail));
 
-      // Only Admins can list all authorized staff/admin accounts
-      allow list: if isAdmin() && resource.data.email is string;
+      // Only Admins can list all authorized staff/admin accounts (enforces non-empty email query filter)
+      allow list: if isAdmin() && resource.data.email > '';
 
       // Only Admins can add authorized users; Super Admins cannot be created as non-admin
       allow create: if isValidEmailId(permissionEmail) &&
