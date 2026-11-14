@@ -63,6 +63,8 @@ export default function SettingsModal({
 
   // Inline confirmation & error states (no window.alert/window.confirm)
   const [confirmResetAll, setConfirmResetAll] = useState(false);
+  const [resetPasswordInput, setResetPasswordInput] = useState('');
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
   const [confirmResetServices, setConfirmResetServices] = useState(false);
   const [confirmDeleteServiceId, setConfirmDeleteServiceId] = useState<string | null>(null);
   const [serviceFormError, setServiceFormError] = useState<string | null>(null);
@@ -91,6 +93,8 @@ export default function SettingsModal({
       });
       setEditableRooms([...rooms]);
       setConfirmResetAll(false);
+      setResetPasswordInput('');
+      setResetPasswordError(null);
       setConfirmResetServices(false);
       setConfirmDeleteServiceId(null);
       setServiceFormError(null);
@@ -440,16 +444,20 @@ export default function SettingsModal({
                 </div>
               </div>
 
-              {/* Reset defaults button with inline confirmation (no window.confirm) */}
+              {/* Reset all bookings to clean empty state with password confirmation (87878787) */}
               <div className="pt-4 border-t border-slate-200 space-y-3">
                 {!confirmResetAll ? (
                   <button
                     type="button"
-                    onClick={() => setConfirmResetAll(true)}
+                    onClick={() => {
+                      setConfirmResetAll(true);
+                      setResetPasswordInput('');
+                      setResetPasswordError(null);
+                    }}
                     className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-3.5 py-2.5 rounded-lg border border-rose-200 transition-colors cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
-                    Khôi Phục Toàn Bộ Dữ Liệu Mẫu Ban Đầu (25 Phòng)
+                    Xóa Toàn Bộ Dữ Liệu Đặt Phòng & Đưa 25 Phòng Về Mới Tinh
                   </button>
                 ) : (
                   <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 space-y-3">
@@ -457,28 +465,60 @@ export default function SettingsModal({
                       <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                       <div className="text-xs">
                         <strong className="block text-sm">
-                          Xác nhận khôi phục toàn bộ dữ liệu mẫu ban đầu (25 Phòng)?
+                          Xác nhận xóa sạch toàn bộ dữ liệu đặt phòng và đưa 25 phòng về mới tinh?
                         </strong>
                         <span className="text-rose-700">
-                          Thao tác này sẽ đưa toàn bộ 25 phòng, danh sách đặt phòng, dịch vụ và cài đặt giá về trạng thái chuẩn ban đầu.
+                          Thao tác này sẽ xóa toàn bộ đơn đặt phòng, hóa đơn, doanh thu trên cả máy này lẫn Firebase Cloud và đưa toàn bộ 25 phòng về trạng thái trống hoàn toàn.
                         </span>
                       </div>
                     </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-rose-900 block">
+                        Nhập mật khẩu xác nhận để xóa dữ liệu:
+                      </label>
+                      <input
+                        type="password"
+                        value={resetPasswordInput}
+                        onChange={(e) => {
+                          setResetPasswordInput(e.target.value);
+                          if (resetPasswordError) setResetPasswordError(null);
+                        }}
+                        placeholder="Nhập mật khẩu..."
+                        className="w-full sm:w-64 bg-white border border-rose-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                      />
+                      {resetPasswordError && (
+                        <p className="text-xs font-bold text-rose-600">{resetPasswordError}</p>
+                      )}
+                    </div>
+
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => {
+                          if (resetPasswordInput.trim() !== '87878787') {
+                            setResetPasswordError(
+                              'Mật khẩu không đúng! Vui lòng nhập đúng mật khẩu để xác nhận xóa.'
+                            );
+                            return;
+                          }
                           onResetDefaults();
                           setConfirmResetAll(false);
+                          setResetPasswordInput('');
+                          setResetPasswordError(null);
                           onClose();
                         }}
                         className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shadow-sm cursor-pointer"
                       >
-                        Xác Nhận Khôi Phục Ngay
+                        Xác Nhận Xóa Sạch Ngay
                       </button>
                       <button
                         type="button"
-                        onClick={() => setConfirmResetAll(false)}
+                        onClick={() => {
+                          setConfirmResetAll(false);
+                          setResetPasswordInput('');
+                          setResetPasswordError(null);
+                        }}
                         className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
                       >
                         Hủy

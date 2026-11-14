@@ -27,6 +27,16 @@ export function loadStoredData(): {
       ? JSON.parse(storedSettings)
       : cloneData(INITIAL_SETTINGS);
 
+    if (parsedSettings.hotelPhone === '0908 123 456') {
+      parsedSettings.hotelPhone = INITIAL_SETTINGS.hotelPhone;
+    }
+    if (
+      parsedSettings.hotelAddress ===
+      '25 Đường Hoa Hồng, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh'
+    ) {
+      parsedSettings.hotelAddress = INITIAL_SETTINGS.hotelAddress;
+    }
+
     if (!parsedSettings.servicesList || !Array.isArray(parsedSettings.servicesList) || parsedSettings.servicesList.length === 0) {
       parsedSettings.servicesList = cloneData(INITIAL_SETTINGS.servicesList);
     }
@@ -70,9 +80,19 @@ export function resetToDefaults(): {
   bookings: Booking[];
   settings: HotelSettings;
 } {
+  const cleanRooms: Room[] = cloneData(INITIAL_ROOMS).map((r) => ({
+    id: r.id,
+    number: r.number,
+    floor: r.floor,
+    type: r.type,
+    status: 'available',
+    bedDescription: r.bedDescription,
+    directPrice: r.directPrice,
+  }));
+
   const defaults = {
-    rooms: cloneData(INITIAL_ROOMS),
-    bookings: cloneData(INITIAL_BOOKINGS),
+    rooms: cleanRooms,
+    bookings: [] as Booking[],
     settings: cloneData(INITIAL_SETTINGS),
   };
   try {

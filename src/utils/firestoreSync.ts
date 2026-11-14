@@ -225,10 +225,16 @@ export function buildBookingPayload(
 }
 
 function docToSettings(data: Record<string, any>): HotelSettings {
+  const rawAddress = data.hotelAddress || '';
+  const rawPhone = data.hotelPhone || '';
   return {
     hotelName: data.hotelName || INITIAL_SETTINGS.hotelName,
-    hotelAddress: data.hotelAddress || '',
-    hotelPhone: data.hotelPhone || '',
+    hotelAddress:
+      rawAddress === '25 Đường Hoa Hồng, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh'
+        ? INITIAL_SETTINGS.hotelAddress
+        : rawAddress,
+    hotelPhone:
+      rawPhone === '0908 123 456' ? INITIAL_SETTINGS.hotelPhone : rawPhone,
     hotelEmail: data.hotelEmail || '',
     defaultManagementFee: Number(data.defaultManagementFee ?? INITIAL_SETTINGS.defaultManagementFee),
     channelCommissions: data.channelCommissions || INITIAL_SETTINGS.channelCommissions,
@@ -428,9 +434,7 @@ export async function pushAllLocalDataToCloud(
     existingSnap.forEach((d) => {
       const data = d.data();
       if (!localIds.has(d.id)) {
-        if (data?.status === 'active' || data?.status === 'reserved') {
-          batch2.delete(d.ref);
-        }
+        batch2.delete(d.ref);
       } else {
         if (data?.serverCreatedAt instanceof Timestamp) {
           bookingCreatedAtMap.set(`${hotelId}:${d.id}`, data.serverCreatedAt);

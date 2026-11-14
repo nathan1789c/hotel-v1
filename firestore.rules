@@ -389,7 +389,7 @@ service cloud.firestore {
             isAdmin()
           );
 
-        allow delete: if isValidId(hotelId) && isValidId(bookingId) && isSharedWorkspace(hotelId) && (existing().status in ['active', 'reserved'] || isAdmin());
+        allow delete: if isValidId(hotelId) && isValidId(bookingId) && isSharedWorkspace(hotelId) && existing().ownerUid == hotelId;
       }
     }
   }

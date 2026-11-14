@@ -157,8 +157,8 @@ export const DEFAULT_HOURLY_RATES = {
 
 export const INITIAL_SETTINGS: HotelSettings = {
   hotelName: 'Thái Hà Huy Hotel',
-  hotelAddress: '25 Đường Hoa Hồng, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh',
-  hotelPhone: '0908 123 456',
+  hotelAddress: '148A Lê Văn Sỹ, P.10, Phú Nhuận, TP.HCM',
+  hotelPhone: '0904130021',
   hotelEmail: 'thaihahuyhotel.com@gmail.com',
   defaultManagementFee: 150000, // 150.000 VNĐ
   channelCommissions: {
