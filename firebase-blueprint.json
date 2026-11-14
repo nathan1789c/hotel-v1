@@ -1,0 +1,379 @@
+{
+  "entities": {
+    "HotelWorkspace": {
+      "title": "HotelWorkspace",
+      "description": "Hotel configuration, pricing rules, and services catalog for a hotel owner workspace.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the hotel owner",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hotelName": {
+          "type": "string",
+          "description": "Display name of the hotel",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "hotelAddress": {
+          "type": "string",
+          "description": "Physical address of the hotel",
+          "maxLength": 300
+        },
+        "hotelPhone": {
+          "type": "string",
+          "description": "Contact phone number",
+          "maxLength": 40
+        },
+        "hotelEmail": {
+          "type": "string",
+          "description": "Contact email address",
+          "maxLength": 120
+        },
+        "defaultManagementFee": {
+          "type": "number",
+          "description": "Default OTA management fee surcharge in VND"
+        },
+        "channelCommissions": {
+          "type": "object",
+          "description": "Commission rate map per OTA channel"
+        },
+        "pricingFormula": {
+          "type": "string",
+          "enum": ["net_guaranteed", "simple_markup"],
+          "description": "OTA pricing formula mode"
+        },
+        "roundingMethod": {
+          "type": "string",
+          "enum": ["1000", "10000", "none"],
+          "description": "Price rounding mode"
+        },
+        "servicesList": {
+          "type": "array",
+          "description": "Catalog of configured minibar and hotel services (max 100 items)"
+        },
+        "hourlyRates": {
+          "type": "object",
+          "description": "Hourly pricing rules by room type"
+        },
+        "serverCreatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace was created"
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when workspace was updated"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "hotelName",
+        "hotelAddress",
+        "hotelPhone",
+        "hotelEmail",
+        "defaultManagementFee",
+        "channelCommissions",
+        "pricingFormula",
+        "roundingMethod",
+        "servicesList",
+        "hourlyRates",
+        "serverCreatedAt",
+        "serverUpdatedAt"
+      ]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Physical hotel room status and pricing configuration.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "number": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "floor": {
+          "type": "number"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["standard_single", "standard_twin", "vip", "deluxe", "family"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["available", "occupied", "reserved", "cleaning", "maintenance"]
+        },
+        "bedDescription": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "directPrice": {
+          "type": "number"
+        },
+        "currentBookingId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "cleaningNote": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "cleaningMonth": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "lastCleanedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "serverCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "number",
+        "floor",
+        "type",
+        "status",
+        "bedDescription",
+        "directPrice",
+        "serverCreatedAt",
+        "serverUpdatedAt"
+      ]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Guest reservation, active stay, or completed checkout record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookingCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "roomId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "roomNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "roomType": {
+          "type": "string",
+          "enum": ["standard_single", "standard_twin", "vip", "deluxe", "family"]
+        },
+        "guestName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "guestPhone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "guestIdCard": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["direct", "agoda", "booking", "trip", "airbnb"]
+        },
+        "channelBookingRef": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "stayType": {
+          "type": "string",
+          "enum": ["nightly", "hourly"]
+        },
+        "checkInDate": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "checkOutDate": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "checkInTime": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "checkOutTime": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "nights": {
+          "type": "number"
+        },
+        "hours": {
+          "type": "number"
+        },
+        "hourlyBasePrice": {
+          "type": "number"
+        },
+        "hourlyExtraPrice": {
+          "type": "number"
+        },
+        "roomPricePerNight": {
+          "type": "number"
+        },
+        "totalRoomPrice": {
+          "type": "number"
+        },
+        "managementFee": {
+          "type": "number"
+        },
+        "otaCommissionRate": {
+          "type": "number"
+        },
+        "otaCommissionAmount": {
+          "type": "number"
+        },
+        "services": {
+          "type": "array",
+          "description": "Minibar and service items (max 50 items)"
+        },
+        "deposit": {
+          "type": "number"
+        },
+        "discount": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "reserved", "completed", "cancelled"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "checkedOutAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "cancelledAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cash", "transfer", "card", "ota_collect"]
+        },
+        "serverCreatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "serverUpdatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "bookingCode",
+        "roomId",
+        "roomNumber",
+        "roomType",
+        "guestName",
+        "guestPhone",
+        "channel",
+        "checkInDate",
+        "checkOutDate",
+        "nights",
+        "roomPricePerNight",
+        "totalRoomPrice",
+        "managementFee",
+        "otaCommissionRate",
+        "otaCommissionAmount",
+        "services",
+        "deposit",
+        "discount",
+        "status",
+        "createdAt",
+        "serverCreatedAt",
+        "serverUpdatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Trusted administrator marker document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 150
+        }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/hotels/{hotelId}": {
+      "schema": { "$ref": "#/entities/HotelWorkspace" },
+      "description": "Hotel workspace settings owned by hotelId."
+    },
+    "/hotels/{hotelId}/rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/Room" },
+      "description": "Room definitions and real-time housekeeping/occupancy state inside a hotel workspace."
+    },
+    "/hotels/{hotelId}/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Bookings and guest stays inside a hotel workspace."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Admin role documents used by security rules."
+    }
+  }
+}

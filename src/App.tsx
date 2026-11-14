@@ -1,7 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { User } from 'firebase/auth';
 import { Room, Booking, HotelSettings, RoomStatus, BookingServiceItem } from './types/hotel';
 import { loadStoredData, saveStoredData, resetToDefaults } from './utils/storage';
 import { addDaysToDateStr, getMonthBounds, getMonthKey } from './utils/pricing';
+import { googleSignIn, initAuth, logout } from './utils/firebase';
+import {
+  ensureCloudWorkspaceInitialized,
+  pushAllLocalDataToCloud,
+  subscribeWorkspace,
+  syncBookingAndRoomsToCloud,
+  syncBookingToCloud,
+  syncRoomsToCloud,
+  syncWorkspaceSettingsToCloud,
+} from './utils/firestoreSync';
 import Header from './components/Header';
 import RoomGrid from './components/RoomGrid';
 import OtaPricingCalculator from './components/OtaPricingCalculator';
@@ -12,6 +23,7 @@ import CheckoutModal, { CheckoutUpdatePayload } from './components/CheckoutModal
 import RoomDetailModal from './components/RoomDetailModal';
 import SettingsModal from './components/SettingsModal';
 import ExtendStayModal, { ExtendStayPayload } from './components/ExtendStayModal';
+import SyncExportModal from './components/SyncExportModal';
 
 export default function App() {
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -21,6 +33,21 @@ export default function App() {
 
   const [currentView, setCurrentView] = useState<'rooms' | 'ota' | 'bookings' | 'analytics'>('rooms');
   const [selectedGridMonth, setSelectedGridMonth] = useState<string>(() => getMonthKey(''));
+
+  // Firebase Cloud Auth & Sync State
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [syncRetryTick, setSyncRetryTick] = useState(0);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  const roomsRef = useRef<Room[]>([]);
+  const bookingsRef = useRef<Booking[]>([]);
+  const settingsRef = useRef<HotelSettings>({} as HotelSettings);
+  roomsRef.current = rooms;
+  bookingsRef.current = bookings;
+  settingsRef.current = settings;
 
   // Modals state
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
@@ -51,12 +78,73 @@ export default function App() {
     setDataLoaded(true);
   }, []);
 
-  // Save data on changes
+  // Save data on changes to localStorage cache
   useEffect(() => {
     if (dataLoaded) {
       saveStoredData(rooms, bookings, settings);
     }
   }, [rooms, bookings, settings, dataLoaded]);
+
+  // 1. Track Firebase Auth state continuously
+  useEffect(() => {
+    const unsubAuth = initAuth((authUser) => {
+      setCloudUser(authUser);
+    });
+    return () => {
+      unsubAuth();
+    };
+  }, []);
+
+  // 2. Immediately initialize & subscribe to Firestore whenever cloudUser is signed in and local data is loaded
+  useEffect(() => {
+    if (!dataLoaded || !cloudUser?.uid) {
+      setIsSyncingCloud(false);
+      return;
+    }
+
+    let active = true;
+    let unsubFirestore: (() => void) | null = null;
+    const hotelId = cloudUser.uid;
+
+    setCloudError(null);
+    setIsSyncingCloud(true);
+
+    ensureCloudWorkspaceInitialized(
+      hotelId,
+      roomsRef.current,
+      bookingsRef.current,
+      settingsRef.current
+    )
+      .then(() => {
+        if (!active) return;
+        unsubFirestore = subscribeWorkspace(hotelId, {
+          onSettings: (cloudSettings) => {
+            setSettings(cloudSettings);
+          },
+          onRooms: (cloudRooms) => {
+            if (cloudRooms.length > 0) {
+              setRooms(cloudRooms);
+            }
+          },
+          onBookings: (cloudBookings) => {
+            setBookings(cloudBookings);
+          },
+          onError: (msg) => setCloudError(msg),
+        });
+      })
+      .catch((err) => {
+        if (!active) return;
+        setCloudError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (active) setIsSyncingCloud(false);
+      });
+
+    return () => {
+      active = false;
+      if (unsubFirestore) unsubFirestore();
+    };
+  }, [cloudUser?.uid, dataLoaded, syncRetryTick]);
 
   if (!dataLoaded) {
     return (
@@ -143,6 +231,53 @@ export default function App() {
     setIsBookingModalOpen(true);
   };
 
+  const reportCloudError = (err: unknown) => {
+    setCloudError(err instanceof Error ? err.message : String(err));
+  };
+
+  const handleSignInGoogle = async () => {
+    setCloudError(null);
+    setIsConnectingGoogle(true);
+    try {
+      const signedInUser = await googleSignIn();
+      setCloudUser(signedInUser);
+    } catch (err) {
+      reportCloudError(err);
+      throw err;
+    } finally {
+      setIsConnectingGoogle(false);
+    }
+  };
+
+  const handleSignOutGoogle = async () => {
+    await logout();
+    setCloudUser(null);
+  };
+
+  const handlePushLocalToCloud = async () => {
+    if (!cloudUser) return;
+    setIsSyncingCloud(true);
+    try {
+      await pushAllLocalDataToCloud(cloudUser.uid, rooms, bookings, settings);
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
+  const handleUpdateSettings = (updatedSettings: HotelSettings) => {
+    setSettings(updatedSettings);
+    if (cloudUser) {
+      syncWorkspaceSettingsToCloud(cloudUser.uid, updatedSettings).catch(reportCloudError);
+    }
+  };
+
+  const handleUpdateRooms = (updatedRooms: Room[]) => {
+    setRooms(updatedRooms);
+    if (cloudUser) {
+      syncRoomsToCloud(cloudUser.uid, updatedRooms).catch(reportCloudError);
+    }
+  };
+
   const handleSaveBooking = (newBooking: Booking, targetRoomId: string, isCheckInNow: boolean) => {
     const updatedBookings = [newBooking, ...bookings];
     setBookings(updatedBookings);
@@ -159,8 +294,6 @@ export default function App() {
           cleaningMonth: undefined,
         };
       }
-      // Future reservations (or reservations when room is occupied/cleaning/maintenance)
-      // must NOT overwrite physical room availability today
       if (r.status === 'occupied' || r.status === 'cleaning' || r.status === 'maintenance') {
         return r;
       }
@@ -178,6 +311,15 @@ export default function App() {
       };
     });
     setRooms(updatedRooms);
+
+    if (cloudUser) {
+      const targetRoom = updatedRooms.find((r) => r.id === targetRoomId);
+      syncBookingAndRoomsToCloud(
+        cloudUser.uid,
+        newBooking,
+        targetRoom ? [targetRoom] : []
+      ).catch(reportCloudError);
+    }
   };
 
   const handleUpdateBooking = (
@@ -209,6 +351,11 @@ export default function App() {
     });
 
     setRooms(updatedRooms);
+
+    if (cloudUser) {
+      const changedRooms = updatedRooms.filter((r) => r.id === oldRoomId || r.id === newRoomId);
+      syncBookingAndRoomsToCloud(cloudUser.uid, updatedBooking, changedRooms).catch(reportCloudError);
+    }
   };
 
   const handleCheckInReservation = (bookingId: string, roomId: string) => {
@@ -234,6 +381,18 @@ export default function App() {
         : r
     );
     setRooms(updatedRooms);
+
+    if (cloudUser) {
+      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+      const targetRoom = updatedRooms.find((r) => r.id === roomId);
+      if (targetBooking) {
+        syncBookingAndRoomsToCloud(
+          cloudUser.uid,
+          targetBooking,
+          targetRoom ? [targetRoom] : []
+        ).catch(reportCloudError);
+      }
+    }
   };
 
   const handleCancelBooking = (bookingId: string, roomId: string) => {
@@ -258,6 +417,18 @@ export default function App() {
       const targetRoom = updatedRooms.find((rm) => rm.id === roomId) || null;
       setSelectedRoomDetail(targetRoom);
     }
+
+    if (cloudUser) {
+      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+      const targetRoom = updatedRooms.find((r) => r.id === roomId);
+      if (targetBooking) {
+        syncBookingAndRoomsToCloud(
+          cloudUser.uid,
+          targetBooking,
+          targetRoom ? [targetRoom] : []
+        ).catch(reportCloudError);
+      }
+    }
   };
 
   const handleOpenExtendModal = (booking: Booking, room: Room) => {
@@ -267,25 +438,31 @@ export default function App() {
   };
 
   const handleConfirmExtend = (payload: ExtendStayPayload) => {
-    setBookings((prev) =>
-      prev.map((b) =>
-        b.id === payload.bookingId
-          ? {
-              ...b,
-              stayType: payload.stayType,
-              checkOutDate: payload.checkOutDate,
-              checkOutTime: payload.checkOutTime,
-              nights: payload.nights,
-              hours: payload.hours,
-              roomPricePerNight: payload.roomPricePerNight,
-              totalRoomPrice: payload.totalRoomPrice,
-              managementFee: payload.managementFee,
-              otaCommissionAmount: payload.otaCommissionAmount,
-              notes: payload.notes,
-            }
-          : b
-      )
+    const updatedBookings = bookings.map((b) =>
+      b.id === payload.bookingId
+        ? {
+            ...b,
+            stayType: payload.stayType,
+            checkOutDate: payload.checkOutDate,
+            checkOutTime: payload.checkOutTime,
+            nights: payload.nights,
+            hours: payload.hours,
+            roomPricePerNight: payload.roomPricePerNight,
+            totalRoomPrice: payload.totalRoomPrice,
+            managementFee: payload.managementFee,
+            otaCommissionAmount: payload.otaCommissionAmount,
+            notes: payload.notes,
+          }
+        : b
     );
+    setBookings(updatedBookings);
+
+    if (cloudUser) {
+      const targetBooking = updatedBookings.find((b) => b.id === payload.bookingId);
+      if (targetBooking) {
+        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
+      }
+    }
   };
 
   const handleOpenCheckoutModal = (booking: Booking, room: Room) => {
@@ -307,7 +484,6 @@ export default function App() {
         ? selectedGridMonth
         : getMonthKey(targetBooking?.checkInDate || '');
 
-    // 1. Mark booking completed
     const updatedBookings = bookings.map((b) =>
       b.id === bookingId
         ? {
@@ -322,7 +498,6 @@ export default function App() {
     );
     setBookings(updatedBookings);
 
-    // 2. Mark room as cleaning (preserving cleaningMonth so Need Cleaning always displays right after checkout)
     const currentTimeStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     const updatedRooms = rooms.map((r) =>
       r.id === roomId
@@ -340,52 +515,76 @@ export default function App() {
     if (selectedRoomDetail?.id === roomId) {
       setIsRoomDetailOpen(false);
     }
+
+    if (cloudUser) {
+      const completedBooking = updatedBookings.find((b) => b.id === bookingId);
+      const updatedRoom = updatedRooms.find((r) => r.id === roomId);
+      if (completedBooking) {
+        syncBookingAndRoomsToCloud(
+          cloudUser.uid,
+          completedBooking,
+          updatedRoom ? [updatedRoom] : []
+        ).catch(reportCloudError);
+      }
+    }
   };
 
   const handleQuickCleanRoom = (roomId: string) => {
     const todayStr = getTodayStr();
-    setRooms(
-      rooms.map((r) => {
-        if (r.id !== roomId) return r;
-        const cleanedRoom: Room = {
-          ...r,
-          status: 'available',
-          cleaningNote: undefined,
-          cleaningMonth: undefined,
-          lastCleanedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-        };
-        return syncRoomStatusWithBookings(cleanedRoom, bookings, todayStr);
-      })
-    );
+    const updatedRooms = rooms.map((r) => {
+      if (r.id !== roomId) return r;
+      const cleanedRoom: Room = {
+        ...r,
+        status: 'available',
+        cleaningNote: undefined,
+        cleaningMonth: undefined,
+        lastCleanedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+      };
+      return syncRoomStatusWithBookings(cleanedRoom, bookings, todayStr);
+    });
+    setRooms(updatedRooms);
+
+    if (cloudUser) {
+      const targetRoom = updatedRooms.find((r) => r.id === roomId);
+      if (targetRoom) {
+        syncRoomsToCloud(cloudUser.uid, [targetRoom]).catch(reportCloudError);
+      }
+    }
   };
 
   const handleQuickSetStatus = (roomId: string, status: RoomStatus, cleaningNote?: string) => {
     const todayStr = getTodayStr();
-    setRooms(
-      rooms.map((r) => {
-        if (r.id !== roomId) return r;
-        if (status === 'available') {
-          const resetRoom: Room = {
-            ...r,
-            status: 'available',
-            cleaningNote: undefined,
-            cleaningMonth: undefined,
-          };
-          return syncRoomStatusWithBookings(resetRoom, bookings, todayStr);
-        }
-        return {
+    const updatedRooms = rooms.map((r) => {
+      if (r.id !== roomId) return r;
+      if (status === 'available') {
+        const resetRoom: Room = {
           ...r,
-          status,
-          cleaningNote: cleaningNote !== undefined ? cleaningNote : r.cleaningNote,
-          cleaningMonth:
-            status === 'cleaning' || status === 'maintenance'
-              ? currentView === 'rooms' && selectedGridMonth
-                ? selectedGridMonth
-                : getMonthKey('')
-              : undefined,
+          status: 'available',
+          cleaningNote: undefined,
+          cleaningMonth: undefined,
         };
-      })
-    );
+        return syncRoomStatusWithBookings(resetRoom, bookings, todayStr);
+      }
+      return {
+        ...r,
+        status,
+        cleaningNote: cleaningNote !== undefined ? cleaningNote : r.cleaningNote,
+        cleaningMonth:
+          status === 'cleaning' || status === 'maintenance'
+            ? currentView === 'rooms' && selectedGridMonth
+              ? selectedGridMonth
+              : getMonthKey('')
+            : undefined,
+      };
+    });
+    setRooms(updatedRooms);
+
+    if (cloudUser) {
+      const targetRoom = updatedRooms.find((r) => r.id === roomId);
+      if (targetRoom) {
+        syncRoomsToCloud(cloudUser.uid, [targetRoom]).catch(reportCloudError);
+      }
+    }
   };
 
   const handleOpenRoomDetail = (room: Room) => {
@@ -394,27 +593,39 @@ export default function App() {
   };
 
   const handleAddServiceToBooking = (bookingId: string, item: BookingServiceItem) => {
-    setBookings(
-      bookings.map((b) => {
-        if (b.id !== bookingId) return b;
-        return {
-          ...b,
-          services: [...b.services, item],
-        };
-      })
-    );
+    const updatedBookings = bookings.map((b) => {
+      if (b.id !== bookingId) return b;
+      return {
+        ...b,
+        services: [...b.services, item],
+      };
+    });
+    setBookings(updatedBookings);
+
+    if (cloudUser) {
+      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+      if (targetBooking) {
+        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
+      }
+    }
   };
 
   const handleRemoveServiceFromBooking = (bookingId: string, serviceId: string) => {
-    setBookings(
-      bookings.map((b) => {
-        if (b.id !== bookingId) return b;
-        return {
-          ...b,
-          services: b.services.filter((s) => s.id !== serviceId),
-        };
-      })
-    );
+    const updatedBookings = bookings.map((b) => {
+      if (b.id !== bookingId) return b;
+      return {
+        ...b,
+        services: b.services.filter((s) => s.id !== serviceId),
+      };
+    });
+    setBookings(updatedBookings);
+
+    if (cloudUser) {
+      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+      if (targetBooking) {
+        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
+      }
+    }
   };
 
   const handleResetDefaults = () => {
@@ -427,6 +638,12 @@ export default function App() {
     setIsCheckoutModalOpen(false);
     setIsExtendModalOpen(false);
     setIsBookingModalOpen(false);
+
+    if (cloudUser) {
+      pushAllLocalDataToCloud(cloudUser.uid, data.rooms, data.bookings, data.settings).catch(
+        reportCloudError
+      );
+    }
   };
 
   const currentRoomDetail = selectedRoomDetail
@@ -468,11 +685,73 @@ export default function App() {
         onChangeView={setCurrentView}
         settings={settings}
         rooms={rooms}
+        isCloudConnected={Boolean(cloudUser)}
+        isSyncingCloud={isSyncingCloud}
+        cloudEmail={cloudUser?.email}
+        onOpenSyncModal={() => setIsSyncModalOpen(true)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {!cloudUser && (
+          <div className="mb-4 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+            <div className="text-xs text-slate-700">
+              <strong className="text-indigo-950 font-extrabold">
+                Đồng bộ Firebase Cloud:
+              </strong>{' '}
+              Đăng nhập Google để đồng bộ trực tiếp 25 phòng, đơn đặt phòng và cài đặt giữa các thiết bị.
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handleSignInGoogle().catch(() => {});
+                }}
+                disabled={isConnectingGoogle}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors disabled:opacity-60 cursor-pointer"
+              >
+                {isConnectingGoogle ? 'Đang kết nối Firebase...' : 'Kết Nối & Đồng Bộ Firebase Ngay'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSyncModalOpen(true)}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                Xuất Excel (.csv)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {cloudError && (
+          <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-900">
+            <span className="break-words">
+              <strong>Lỗi đồng bộ Firebase:</strong> {cloudError}
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              {cloudUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCloudError(null);
+                    setSyncRetryTick((n) => n + 1);
+                  }}
+                  className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold cursor-pointer"
+                >
+                  Thử lại
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setCloudError(null)}
+                className="px-2.5 py-1 bg-white hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg font-semibold cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        )}
         {currentView === 'rooms' && (
           <RoomGrid
             rooms={rooms}
@@ -495,7 +774,7 @@ export default function App() {
         {currentView === 'ota' && (
           <OtaPricingCalculator
             settings={settings}
-            onUpdateSettings={setSettings}
+            onUpdateSettings={handleUpdateSettings}
           />
         )}
 
@@ -598,9 +877,21 @@ export default function App() {
         onClose={() => setIsSettingsModalOpen(false)}
         settings={settings}
         rooms={rooms}
-        onSaveSettings={setSettings}
-        onUpdateRooms={setRooms}
+        onSaveSettings={handleUpdateSettings}
+        onUpdateRooms={handleUpdateRooms}
         onResetDefaults={handleResetDefaults}
+      />
+
+      <SyncExportModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        user={cloudUser}
+        isSyncingCloud={isSyncingCloud}
+        cloudError={cloudError}
+        bookings={bookings}
+        onSignInGoogle={handleSignInGoogle}
+        onSignOutGoogle={handleSignOutGoogle}
+        onPushLocalToCloud={handlePushLocalToCloud}
       />
     </div>
   );

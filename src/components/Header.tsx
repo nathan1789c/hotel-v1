@@ -6,7 +6,8 @@ import {
   Layers, 
   Sparkles, 
   BarChart3, 
-  FileText
+  FileText,
+  Cloud
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -14,6 +15,10 @@ interface HeaderProps {
   onChangeView: (view: 'rooms' | 'ota' | 'bookings' | 'analytics') => void;
   settings: HotelSettings;
   rooms: Room[];
+  isCloudConnected?: boolean;
+  isSyncingCloud?: boolean;
+  cloudEmail?: string | null;
+  onOpenSyncModal: () => void;
   onOpenSettings: () => void;
 }
 
@@ -22,6 +27,10 @@ export default function Header({
   onChangeView,
   settings,
   rooms,
+  isCloudConnected = false,
+  isSyncingCloud = false,
+  cloudEmail = null,
+  onOpenSyncModal,
   onOpenSettings,
 }: HeaderProps) {
   const [time, setTime] = useState<string>('');
@@ -102,6 +111,30 @@ export default function Header({
               <span className="font-bold text-slate-800">{time}</span>
               <span className="capitalize">{date}</span>
             </div>
+
+            <button
+              type="button"
+              onClick={onOpenSyncModal}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                isCloudConnected
+                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+              }`}
+              title={
+                isCloudConnected
+                  ? `Đang đồng bộ Firebase (${cloudEmail || 'Google'})`
+                  : 'Kết nối Firebase Cloud & Xuất Excel'
+              }
+            >
+              <Cloud className={`w-4 h-4 ${isCloudConnected ? 'text-emerald-600' : 'text-indigo-600'}`} />
+              <span className="hidden sm:inline">
+                {isSyncingCloud
+                  ? 'Đang đồng bộ...'
+                  : isCloudConnected
+                  ? 'Firebase'
+                  : 'Kết Nối Firebase'}
+              </span>
+            </button>
 
             <button
               onClick={onOpenSettings}

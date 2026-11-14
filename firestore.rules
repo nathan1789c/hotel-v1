@@ -1,0 +1,403 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        (request.auth.token.email is string && request.auth.token.email.lower() == 'nathan.bui1789@gmail.com') ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isWorkspaceOwner(hotelId) {
+      return isVerified() && (hotelId == request.auth.uid || isAdmin());
+    }
+
+    function isParentWorkspaceOwner(hotelId) {
+      return isVerified() && (
+        (
+          exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
+          get(/databases/$(database)/documents/hotels/$(hotelId)).data.ownerUid == request.auth.uid
+        ) || isAdmin()
+      );
+    }
+
+    function isValidHotelWorkspace(data, hotelId) {
+      return data.keys().hasAll([
+        'ownerUid',
+        'hotelName',
+        'hotelAddress',
+        'hotelPhone',
+        'hotelEmail',
+        'defaultManagementFee',
+        'channelCommissions',
+        'pricingFormula',
+        'roundingMethod',
+        'servicesList',
+        'hourlyRates',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerUid',
+        'hotelName',
+        'hotelAddress',
+        'hotelPhone',
+        'hotelEmail',
+        'defaultManagementFee',
+        'channelCommissions',
+        'pricingFormula',
+        'roundingMethod',
+        'servicesList',
+        'hourlyRates',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      isValidId(data.ownerUid) &&
+      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.hotelName is string && data.hotelName.size() >= 1 && data.hotelName.size() <= 120 &&
+      data.hotelAddress is string && data.hotelAddress.size() <= 300 &&
+      data.hotelPhone is string && data.hotelPhone.size() <= 40 &&
+      data.hotelEmail is string && data.hotelEmail.size() <= 120 &&
+      data.defaultManagementFee is number && data.defaultManagementFee >= 0 && data.defaultManagementFee <= 100000000 &&
+      data.channelCommissions is map &&
+      data.pricingFormula in ['net_guaranteed', 'simple_markup'] &&
+      data.roundingMethod in ['1000', '10000', 'none'] &&
+      data.servicesList is list && data.servicesList.size() <= 100 &&
+      (data.servicesList.size() == 0 || data.servicesList[0] is map) &&
+      data.hourlyRates is map &&
+      data.serverCreatedAt is timestamp &&
+      data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidRoom(data, hotelId, roomId) {
+      return data.keys().hasAll([
+        'id',
+        'ownerUid',
+        'number',
+        'floor',
+        'type',
+        'status',
+        'bedDescription',
+        'directPrice',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'ownerUid',
+        'number',
+        'floor',
+        'type',
+        'status',
+        'bedDescription',
+        'directPrice',
+        'currentBookingId',
+        'cleaningNote',
+        'cleaningMonth',
+        'lastCleanedAt',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      isValidId(data.id) && data.id == roomId &&
+      isValidId(data.ownerUid) &&
+      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.number is string && data.number.size() >= 1 && data.number.size() <= 20 &&
+      data.floor is number && data.floor >= 1 && data.floor <= 50 &&
+      data.type in ['standard_single', 'standard_twin', 'vip', 'deluxe', 'family'] &&
+      data.status in ['available', 'occupied', 'reserved', 'cleaning', 'maintenance'] &&
+      data.bedDescription is string && data.bedDescription.size() <= 120 &&
+      data.directPrice is number && data.directPrice >= 0 && data.directPrice <= 100000000 &&
+      (!('currentBookingId' in data) || (data.currentBookingId is string && data.currentBookingId.size() <= 128)) &&
+      (!('cleaningNote' in data) || (data.cleaningNote is string && data.cleaningNote.size() <= 300)) &&
+      (!('cleaningMonth' in data) || (data.cleaningMonth is string && data.cleaningMonth.size() <= 20)) &&
+      (!('lastCleanedAt' in data) || (data.lastCleanedAt is string && data.lastCleanedAt.size() <= 40)) &&
+      data.serverCreatedAt is timestamp &&
+      data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidBooking(data, hotelId, bookingId) {
+      return data.keys().hasAll([
+        'id',
+        'ownerUid',
+        'bookingCode',
+        'roomId',
+        'roomNumber',
+        'roomType',
+        'guestName',
+        'guestPhone',
+        'channel',
+        'checkInDate',
+        'checkOutDate',
+        'nights',
+        'roomPricePerNight',
+        'totalRoomPrice',
+        'managementFee',
+        'otaCommissionRate',
+        'otaCommissionAmount',
+        'services',
+        'deposit',
+        'discount',
+        'status',
+        'createdAt',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'ownerUid',
+        'bookingCode',
+        'roomId',
+        'roomNumber',
+        'roomType',
+        'guestName',
+        'guestPhone',
+        'guestIdCard',
+        'channel',
+        'channelBookingRef',
+        'stayType',
+        'checkInDate',
+        'checkOutDate',
+        'checkInTime',
+        'checkOutTime',
+        'nights',
+        'hours',
+        'hourlyBasePrice',
+        'hourlyExtraPrice',
+        'roomPricePerNight',
+        'totalRoomPrice',
+        'managementFee',
+        'otaCommissionRate',
+        'otaCommissionAmount',
+        'services',
+        'deposit',
+        'discount',
+        'status',
+        'notes',
+        'createdAt',
+        'checkedOutAt',
+        'cancelledAt',
+        'paymentMethod',
+        'serverCreatedAt',
+        'serverUpdatedAt'
+      ]) &&
+      isValidId(data.id) && data.id == bookingId &&
+      isValidId(data.ownerUid) &&
+      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.bookingCode is string && data.bookingCode.size() >= 1 && data.bookingCode.size() <= 64 &&
+      isValidId(data.roomId) &&
+      data.roomNumber is string && data.roomNumber.size() >= 1 && data.roomNumber.size() <= 20 &&
+      data.roomType in ['standard_single', 'standard_twin', 'vip', 'deluxe', 'family'] &&
+      data.guestName is string && data.guestName.size() >= 1 && data.guestName.size() <= 150 &&
+      data.guestPhone is string && data.guestPhone.size() <= 40 &&
+      (!('guestIdCard' in data) || (data.guestIdCard is string && data.guestIdCard.size() <= 50)) &&
+      data.channel in ['direct', 'agoda', 'booking', 'trip', 'airbnb'] &&
+      (!('channelBookingRef' in data) || (data.channelBookingRef is string && data.channelBookingRef.size() <= 80)) &&
+      (!('stayType' in data) || data.stayType in ['nightly', 'hourly']) &&
+      data.checkInDate is string && data.checkInDate.size() >= 8 && data.checkInDate.size() <= 20 &&
+      data.checkOutDate is string && data.checkOutDate.size() >= 8 && data.checkOutDate.size() <= 20 &&
+      (!('checkInTime' in data) || (data.checkInTime is string && data.checkInTime.size() <= 20)) &&
+      (!('checkOutTime' in data) || (data.checkOutTime is string && data.checkOutTime.size() <= 20)) &&
+      data.nights is number && data.nights >= 0 && data.nights <= 3650 &&
+      (!('hours' in data) || (data.hours is number && data.hours >= 1 && data.hours <= 720)) &&
+      (!('hourlyBasePrice' in data) || (data.hourlyBasePrice is number && data.hourlyBasePrice >= 0 && data.hourlyBasePrice <= 100000000)) &&
+      (!('hourlyExtraPrice' in data) || (data.hourlyExtraPrice is number && data.hourlyExtraPrice >= 0 && data.hourlyExtraPrice <= 100000000)) &&
+      data.roomPricePerNight is number && data.roomPricePerNight >= 0 && data.roomPricePerNight <= 100000000 &&
+      data.totalRoomPrice is number && data.totalRoomPrice >= 0 && data.totalRoomPrice <= 1000000000 &&
+      data.managementFee is number && data.managementFee >= 0 && data.managementFee <= 100000000 &&
+      data.otaCommissionRate is number && data.otaCommissionRate >= 0 && data.otaCommissionRate <= 1 &&
+      data.otaCommissionAmount is number && data.otaCommissionAmount >= 0 && data.otaCommissionAmount <= 1000000000 &&
+      data.services is list && data.services.size() <= 50 &&
+      (data.services.size() == 0 || data.services[0] is map) &&
+      data.deposit is number && data.deposit >= 0 && data.deposit <= 1000000000 &&
+      data.discount is number && data.discount >= 0 && data.discount <= 1000000000 &&
+      data.status in ['active', 'reserved', 'completed', 'cancelled'] &&
+      (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+      data.createdAt is string && data.createdAt.size() <= 64 &&
+      (!('checkedOutAt' in data) || (data.checkedOutAt is string && data.checkedOutAt.size() <= 64)) &&
+      (!('cancelledAt' in data) || (data.cancelledAt is string && data.cancelledAt.size() <= 64)) &&
+      (!('paymentMethod' in data) || data.paymentMethod in ['cash', 'transfer', 'card', 'ota_collect']) &&
+      data.serverCreatedAt is timestamp &&
+      data.serverUpdatedAt is timestamp;
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (request.auth.uid == userId || isAdmin());
+      allow list: if isVerified() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /hotels/{hotelId} {
+      allow get: if isValidId(hotelId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
+      allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+
+      allow create: if isValidId(hotelId) &&
+        isWorkspaceOwner(hotelId) &&
+        isValidHotelWorkspace(incoming(), hotelId) &&
+        incoming().serverCreatedAt == request.time &&
+        incoming().serverUpdatedAt == request.time;
+
+      allow update: if isValidId(hotelId) &&
+        isWorkspaceOwner(hotelId) &&
+        isValidHotelWorkspace(incoming(), hotelId) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().serverCreatedAt == existing().serverCreatedAt &&
+        incoming().serverUpdatedAt == request.time &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'hotelName',
+            'hotelAddress',
+            'hotelPhone',
+            'hotelEmail',
+            'defaultManagementFee',
+            'channelCommissions',
+            'pricingFormula',
+            'roundingMethod',
+            'servicesList',
+            'hourlyRates',
+            'serverUpdatedAt'
+          ]) ||
+          isAdmin()
+        );
+
+      allow delete: if isValidId(hotelId) && isAdmin();
+
+      match /rooms/{roomId} {
+        allow get: if isValidId(hotelId) && isValidId(roomId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
+        allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+
+        allow create: if isValidId(hotelId) &&
+          isValidId(roomId) &&
+          isParentWorkspaceOwner(hotelId) &&
+          isValidRoom(incoming(), hotelId, roomId) &&
+          incoming().serverCreatedAt == request.time &&
+          incoming().serverUpdatedAt == request.time;
+
+        allow update: if isValidId(hotelId) &&
+          isValidId(roomId) &&
+          isParentWorkspaceOwner(hotelId) &&
+          isValidRoom(incoming(), hotelId, roomId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().id == existing().id &&
+          incoming().serverCreatedAt == existing().serverCreatedAt &&
+          incoming().serverUpdatedAt == request.time &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'currentBookingId',
+              'cleaningNote',
+              'cleaningMonth',
+              'lastCleanedAt',
+              'serverUpdatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'number',
+              'floor',
+              'type',
+              'bedDescription',
+              'directPrice',
+              'status',
+              'currentBookingId',
+              'cleaningNote',
+              'cleaningMonth',
+              'lastCleanedAt',
+              'serverUpdatedAt'
+            ]) ||
+            isAdmin()
+          );
+
+        allow delete: if isValidId(hotelId) && isValidId(roomId) && isParentWorkspaceOwner(hotelId);
+      }
+
+      match /bookings/{bookingId} {
+        allow get: if isValidId(hotelId) && isValidId(bookingId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
+        allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+
+        allow create: if isValidId(hotelId) &&
+          isValidId(bookingId) &&
+          isParentWorkspaceOwner(hotelId) &&
+          isValidBooking(incoming(), hotelId, bookingId) &&
+          exists(/databases/$(database)/documents/hotels/$(hotelId)/rooms/$(incoming().roomId)) &&
+          incoming().serverCreatedAt == request.time &&
+          incoming().serverUpdatedAt == request.time;
+
+        allow update: if isValidId(hotelId) &&
+          isValidId(bookingId) &&
+          isParentWorkspaceOwner(hotelId) &&
+          isValidBooking(incoming(), hotelId, bookingId) &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().id == existing().id &&
+          incoming().serverCreatedAt == existing().serverCreatedAt &&
+          incoming().serverUpdatedAt == request.time &&
+          (existing().status in ['active', 'reserved'] || isAdmin()) &&
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'services',
+              'serverUpdatedAt'
+            ]) ||
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'stayType',
+              'checkInDate',
+              'checkOutDate',
+              'checkInTime',
+              'checkOutTime',
+              'nights',
+              'hours',
+              'hourlyBasePrice',
+              'hourlyExtraPrice',
+              'roomId',
+              'roomNumber',
+              'roomType',
+              'roomPricePerNight',
+              'totalRoomPrice',
+              'managementFee',
+              'otaCommissionRate',
+              'otaCommissionAmount',
+              'deposit',
+              'discount',
+              'guestName',
+              'guestPhone',
+              'guestIdCard',
+              'channel',
+              'channelBookingRef',
+              'notes',
+              'services',
+              'paymentMethod',
+              'checkedOutAt',
+              'cancelledAt',
+              'serverUpdatedAt'
+            ]) ||
+            isAdmin()
+          );
+
+        allow delete: if isValidId(hotelId) && isValidId(bookingId) && isParentWorkspaceOwner(hotelId);
+      }
+    }
+  }
+}
