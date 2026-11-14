@@ -426,10 +426,12 @@ export async function pushAllLocalDataToCloud(
     const batch2 = writeBatch(db);
 
     existingSnap.forEach((d) => {
+      const data = d.data();
       if (!localIds.has(d.id)) {
-        batch2.delete(d.ref);
+        if (data?.status === 'active' || data?.status === 'reserved') {
+          batch2.delete(d.ref);
+        }
       } else {
-        const data = d.data();
         if (data?.serverCreatedAt instanceof Timestamp) {
           bookingCreatedAtMap.set(`${hotelId}:${d.id}`, data.serverCreatedAt);
         }

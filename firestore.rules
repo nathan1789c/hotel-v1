@@ -34,17 +34,9 @@ service cloud.firestore {
       );
     }
 
-    function isWorkspaceOwner(hotelId) {
-      return isVerified() && (hotelId == request.auth.uid || isAdmin());
-    }
-
-    function isParentWorkspaceOwner(hotelId) {
-      return isVerified() && (
-        (
-          exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
-          get(/databases/$(database)/documents/hotels/$(hotelId)).data.ownerUid == request.auth.uid
-        ) || isAdmin()
-      );
+    // Shared central workspace ID used by all receptionists & devices without requiring login
+    function isSharedWorkspace(hotelId) {
+      return hotelId == 'hotel-thai-ha-huy-25';
     }
 
     function isValidHotelWorkspace(data, hotelId) {
@@ -79,7 +71,8 @@ service cloud.firestore {
         'serverUpdatedAt'
       ]) &&
       isValidId(data.ownerUid) &&
-      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.ownerUid == hotelId &&
+      isSharedWorkspace(hotelId) &&
       data.hotelName is string && data.hotelName.size() >= 1 && data.hotelName.size() <= 120 &&
       data.hotelAddress is string && data.hotelAddress.size() <= 300 &&
       data.hotelPhone is string && data.hotelPhone.size() <= 40 &&
@@ -126,7 +119,8 @@ service cloud.firestore {
       ]) &&
       isValidId(data.id) && data.id == roomId &&
       isValidId(data.ownerUid) &&
-      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.ownerUid == hotelId &&
+      isSharedWorkspace(hotelId) &&
       data.number is string && data.number.size() >= 1 && data.number.size() <= 20 &&
       data.floor is number && data.floor >= 1 && data.floor <= 50 &&
       data.type in ['standard_single', 'standard_twin', 'vip', 'deluxe', 'family'] &&
@@ -208,7 +202,8 @@ service cloud.firestore {
       ]) &&
       isValidId(data.id) && data.id == bookingId &&
       isValidId(data.ownerUid) &&
-      (data.ownerUid == request.auth.uid || (isAdmin() && data.ownerUid == hotelId)) &&
+      data.ownerUid == hotelId &&
+      isSharedWorkspace(hotelId) &&
       data.bookingCode is string && data.bookingCode.size() >= 1 && data.bookingCode.size() <= 64 &&
       isValidId(data.roomId) &&
       data.roomNumber is string && data.roomNumber.size() >= 1 && data.roomNumber.size() <= 20 &&
@@ -253,54 +248,53 @@ service cloud.firestore {
     }
 
     match /hotels/{hotelId} {
-      allow get: if isValidId(hotelId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
-      allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow get: if isValidId(hotelId) && isSharedWorkspace(hotelId) && (resource == null || existing().ownerUid == hotelId);
+      allow list: if isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
       allow create: if isValidId(hotelId) &&
-        isWorkspaceOwner(hotelId) &&
+        isSharedWorkspace(hotelId) &&
         isValidHotelWorkspace(incoming(), hotelId) &&
         incoming().serverCreatedAt == request.time &&
         incoming().serverUpdatedAt == request.time;
 
       allow update: if isValidId(hotelId) &&
-        isWorkspaceOwner(hotelId) &&
+        isSharedWorkspace(hotelId) &&
         isValidHotelWorkspace(incoming(), hotelId) &&
         incoming().ownerUid == existing().ownerUid &&
         incoming().serverCreatedAt == existing().serverCreatedAt &&
         incoming().serverUpdatedAt == request.time &&
-        (
-          incoming().diff(existing()).affectedKeys().hasOnly([
-            'hotelName',
-            'hotelAddress',
-            'hotelPhone',
-            'hotelEmail',
-            'defaultManagementFee',
-            'channelCommissions',
-            'pricingFormula',
-            'roundingMethod',
-            'servicesList',
-            'hourlyRates',
-            'serverUpdatedAt'
-          ]) ||
-          isAdmin()
-        );
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'hotelName',
+          'hotelAddress',
+          'hotelPhone',
+          'hotelEmail',
+          'defaultManagementFee',
+          'channelCommissions',
+          'pricingFormula',
+          'roundingMethod',
+          'servicesList',
+          'hourlyRates',
+          'serverUpdatedAt'
+        ]);
 
       allow delete: if isValidId(hotelId) && isAdmin();
 
       match /rooms/{roomId} {
-        allow get: if isValidId(hotelId) && isValidId(roomId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
-        allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+        allow get: if isValidId(hotelId) && isValidId(roomId) && isSharedWorkspace(hotelId) && (resource == null || existing().ownerUid == hotelId);
+        allow list: if isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
         allow create: if isValidId(hotelId) &&
           isValidId(roomId) &&
-          isParentWorkspaceOwner(hotelId) &&
+          isSharedWorkspace(hotelId) &&
+          exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
           isValidRoom(incoming(), hotelId, roomId) &&
           incoming().serverCreatedAt == request.time &&
           incoming().serverUpdatedAt == request.time;
 
         allow update: if isValidId(hotelId) &&
           isValidId(roomId) &&
-          isParentWorkspaceOwner(hotelId) &&
+          isSharedWorkspace(hotelId) &&
+          exists(/databases/$(database)/documents/hotels/$(hotelId)) &&
           isValidRoom(incoming(), hotelId, roomId) &&
           incoming().ownerUid == existing().ownerUid &&
           incoming().id == existing().id &&
@@ -327,28 +321,27 @@ service cloud.firestore {
               'cleaningMonth',
               'lastCleanedAt',
               'serverUpdatedAt'
-            ]) ||
-            isAdmin()
+            ])
           );
 
-        allow delete: if isValidId(hotelId) && isValidId(roomId) && isParentWorkspaceOwner(hotelId);
+        allow delete: if isValidId(hotelId) && isValidId(roomId) && isAdmin();
       }
 
       match /bookings/{bookingId} {
-        allow get: if isValidId(hotelId) && isValidId(bookingId) && isWorkspaceOwner(hotelId) && (resource == null || existing().ownerUid == hotelId);
-        allow list: if isVerified() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+        allow get: if isValidId(hotelId) && isValidId(bookingId) && isSharedWorkspace(hotelId) && (resource == null || existing().ownerUid == hotelId);
+        allow list: if isSharedWorkspace(hotelId) && resource.data.ownerUid == hotelId;
 
         allow create: if isValidId(hotelId) &&
           isValidId(bookingId) &&
-          isParentWorkspaceOwner(hotelId) &&
-          isValidBooking(incoming(), hotelId, bookingId) &&
+          isSharedWorkspace(hotelId) &&
           exists(/databases/$(database)/documents/hotels/$(hotelId)/rooms/$(incoming().roomId)) &&
+          isValidBooking(incoming(), hotelId, bookingId) &&
           incoming().serverCreatedAt == request.time &&
           incoming().serverUpdatedAt == request.time;
 
         allow update: if isValidId(hotelId) &&
           isValidId(bookingId) &&
-          isParentWorkspaceOwner(hotelId) &&
+          isSharedWorkspace(hotelId) &&
           isValidBooking(incoming(), hotelId, bookingId) &&
           incoming().ownerUid == existing().ownerUid &&
           incoming().id == existing().id &&
@@ -396,7 +389,7 @@ service cloud.firestore {
             isAdmin()
           );
 
-        allow delete: if isValidId(hotelId) && isValidId(bookingId) && isParentWorkspaceOwner(hotelId);
+        allow delete: if isValidId(hotelId) && isValidId(bookingId) && isSharedWorkspace(hotelId) && (existing().status in ['active', 'reserved'] || isAdmin());
       }
     }
   }

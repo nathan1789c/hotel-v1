@@ -1,40 +1,35 @@
 import { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
 import { Booking } from '../types/hotel';
 import { exportBookingsToCsv, exportMonthlyRevenueToCsv } from '../utils/exportCsv';
 import {
   X,
   Cloud,
-  CloudOff,
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
   Download,
-  LogOut,
 } from 'lucide-react';
 
 interface SyncExportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  user: User | null;
+  isCloudConnected: boolean;
   isSyncingCloud: boolean;
   cloudError: string | null;
   bookings: Booking[];
-  onSignInGoogle: () => Promise<void>;
-  onSignOutGoogle: () => Promise<void>;
   onPushLocalToCloud: () => Promise<void>;
+  onRetryConnection: () => void;
 }
 
 export default function SyncExportModal({
   isOpen,
   onClose,
-  user,
+  isCloudConnected,
   isSyncingCloud,
   cloudError,
   bookings,
-  onSignInGoogle,
-  onSignOutGoogle,
   onPushLocalToCloud,
+  onRetryConnection,
 }: SyncExportModalProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
@@ -50,25 +45,6 @@ export default function SyncExportModal({
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleGoogleSignInClick = async () => {
-    setFeedback(null);
-    setIsBusy(true);
-    try {
-      await onSignInGoogle();
-      setFeedback({
-        type: 'success',
-        message: 'Đã kết nối Firebase Cloud và kích hoạt đồng bộ thời gian thực thành công!',
-      });
-    } catch (err) {
-      setFeedback({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Đăng nhập Google thất bại.',
-      });
-    } finally {
-      setIsBusy(false);
-    }
-  };
 
   return (
     <div
@@ -88,7 +64,7 @@ export default function SyncExportModal({
             <div>
               <h3 className="text-lg font-extrabold">Đồng Bộ Firebase Cloud & Xuất Excel</h3>
               <p className="text-xs text-slate-300">
-                Đồng bộ dữ liệu nhiều thiết bị theo thời gian thực và tải file báo cáo
+                Tự động đồng bộ chung 25 phòng cho mọi thiết bị mà không cần đăng nhập
               </p>
             </div>
           </div>
@@ -120,137 +96,93 @@ export default function SyncExportModal({
             </div>
           )}
 
-          {/* Section 1: Firebase Cloud Sync */}
+          {/* Section 1: Always-on Shared Firebase Cloud Sync */}
           <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Cloud className="w-4 h-4 text-indigo-600" />
                 <h4 className="text-sm font-black text-slate-900">
-                  1. Đồng Bộ Đám Mây Firebase (Firestore)
+                  1. Đồng Bộ Đám Mây Firebase (Dùng Chung)
                 </h4>
               </div>
-              {user ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  {isSyncingCloud ? 'Đang đồng bộ...' : 'Đã kết nối Real-time'}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">
-                  <CloudOff className="w-3 h-3" />
-                  Đang lưu cục bộ (Offline)
-                </span>
-              )}
+              <span
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                  isCloudConnected
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                    : 'bg-amber-100 text-amber-800 border-amber-200'
+                }`}
+              >
+                {isSyncingCloud
+                  ? 'Đang đồng bộ...'
+                  : isCloudConnected
+                  ? 'Đã kết nối Real-time'
+                  : 'Chưa kết nối'}
+              </span>
             </div>
 
-            {!user ? (
-              <div className="space-y-3">
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Đăng nhập bằng tài khoản Google để lưu toàn bộ 25 phòng, đơn đặt phòng và cài đặt lên Firebase Firestore. Các máy tính hoặc điện thoại khác đăng nhập cùng tài khoản sẽ tự động đồng bộ tức thì.
-                </p>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Hệ thống luôn tự động kết nối cơ sở dữ liệu dùng chung trên Firebase Firestore. Mọi nhân viên hoặc thiết bị mở ứng dụng đều xem và cập nhật chung 25 phòng và danh sách đặt phòng ngay lập tức mà không cần đăng nhập.
+            </p>
+
+            {!confirmOverwriteCloud ? (
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleGoogleSignInClick}
-                  disabled={isBusy}
-                  className="gsi-material-button inline-flex items-center justify-center gap-2.5 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-800 border border-slate-300 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold shadow-2xs transition-all disabled:opacity-60 cursor-pointer"
+                  onClick={() => setConfirmOverwriteCloud(true)}
+                  disabled={isBusy || isSyncingCloud}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60 cursor-pointer"
                 >
-                  <span className="w-4 h-4 shrink-0 inline-block">
-                    <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" style={{ display: 'block' }}>
-                      <path
-                        fill="#EA4335"
-                        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                      />
-                      <path
-                        fill="#4285F4"
-                        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                      />
-                      <path fill="none" d="M0 0h48v48H0z" />
-                    </svg>
-                  </span>
-                  <span>{isBusy ? 'Đang kết nối...' : 'Sign in with Google để đồng bộ Firebase'}</span>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Đẩy Dữ Liệu Hiện Tại Lên Cloud
                 </button>
+                {cloudError && (
+                  <button
+                    type="button"
+                    onClick={onRetryConnection}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
+                  >
+                    Kết nối lại
+                  </button>
+                )}
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="bg-white rounded-lg p-3 border border-indigo-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div>
-                    <div className="font-bold text-slate-900">{user.displayName || 'Tài khoản Google'}</div>
-                    <div className="text-slate-500">{user.email}</div>
-                  </div>
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 space-y-2 text-xs">
+                <p className="font-bold text-amber-950">
+                  Xác nhận đồng bộ toàn bộ 25 phòng & {bookings.length} đơn hiện tại trên màn hình lên Firebase Cloud?
+                </p>
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={async () => {
-                      await onSignOutGoogle();
-                      setFeedback({ type: 'success', message: 'Đã đăng xuất Firebase.' });
+                      setIsBusy(true);
+                      try {
+                        await onPushLocalToCloud();
+                        setConfirmOverwriteCloud(false);
+                        setFeedback({
+                          type: 'success',
+                          message: 'Đã đồng bộ toàn bộ dữ liệu hiện tại lên Firebase Cloud!',
+                        });
+                      } catch (err) {
+                        setFeedback({
+                          type: 'error',
+                          message: err instanceof Error ? err.message : 'Lỗi đồng bộ lên Cloud.',
+                        });
+                      } finally {
+                        setIsBusy(false);
+                      }
                     }}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold cursor-pointer"
                   >
-                    <LogOut className="w-3.5 h-3.5" />
-                    Đăng Xuất
+                    Xác Nhận Đẩy Lên Cloud
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmOverwriteCloud(false)}
+                    className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg font-semibold cursor-pointer"
+                  >
+                    Hủy
                   </button>
                 </div>
-
-                {!confirmOverwriteCloud ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmOverwriteCloud(true)}
-                      disabled={isBusy || isSyncingCloud}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60 cursor-pointer"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      Đẩy Dữ Liệu Hiện Tại Lên Cloud
-                    </button>
-                    <span className="text-[11px] text-slate-500">
-                      Mọi thay đổi phòng/đơn mới đều tự động đồng bộ lên Firebase.
-                    </span>
-                  </div>
-                ) : (
-                  <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 space-y-2 text-xs">
-                    <p className="font-bold text-amber-950">
-                      Xác nhận ghi đè toàn bộ 25 phòng & {bookings.length} đơn hiện tại trên màn hình lên Firebase Cloud?
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsBusy(true);
-                          try {
-                            await onPushLocalToCloud();
-                            setConfirmOverwriteCloud(false);
-                            setFeedback({
-                              type: 'success',
-                              message: 'Đã đồng bộ toàn bộ dữ liệu hiện tại lên Firebase Cloud!',
-                            });
-                          } catch (err) {
-                            setFeedback({
-                              type: 'error',
-                              message: err instanceof Error ? err.message : 'Lỗi đồng bộ lên Cloud.',
-                            });
-                          } finally {
-                            setIsBusy(false);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold cursor-pointer"
-                      >
-                        Xác Nhận Đẩy Lên Cloud
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmOverwriteCloud(false)}
-                        className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg font-semibold cursor-pointer"
-                      >
-                        Hủy
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </div>
@@ -264,7 +196,7 @@ export default function SyncExportModal({
               </h4>
             </div>
             <p className="text-xs text-slate-600">
-              Tải nhanh file bảng tính chuẩn UTF-8 tiếng Việt để mở trực tiếp bằng Microsoft Excel hoặc Google Sheets.
+              Tải nhanh file bảng tính chuẩn UTF-8 tiếng Việt để mở trực tiếp bằng Microsoft Excel.
             </p>
             <div className="flex flex-wrap gap-2">
               <button

@@ -17,7 +17,6 @@ interface HeaderProps {
   rooms: Room[];
   isCloudConnected?: boolean;
   isSyncingCloud?: boolean;
-  cloudEmail?: string | null;
   onOpenSyncModal: () => void;
   onOpenSettings: () => void;
 }
@@ -29,7 +28,6 @@ export default function Header({
   rooms,
   isCloudConnected = false,
   isSyncingCloud = false,
-  cloudEmail = null,
   onOpenSyncModal,
   onOpenSettings,
 }: HeaderProps) {
@@ -120,11 +118,7 @@ export default function Header({
                   ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
                   : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
               }`}
-              title={
-                isCloudConnected
-                  ? `Đang đồng bộ Firebase (${cloudEmail || 'Google'})`
-                  : 'Kết nối Firebase Cloud & Xuất Excel'
-              }
+              title="Đồng bộ Firebase Cloud & Xuất Excel"
             >
               <Cloud className={`w-4 h-4 ${isCloudConnected ? 'text-emerald-600' : 'text-indigo-600'}`} />
               <span className="hidden sm:inline">
@@ -132,7 +126,7 @@ export default function Header({
                   ? 'Đang đồng bộ...'
                   : isCloudConnected
                   ? 'Firebase'
-                  : 'Kết Nối Firebase'}
+                  : 'Cloud & Excel'}
               </span>
             </button>
 

@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { User } from 'firebase/auth';
 import { Room, Booking, HotelSettings, RoomStatus, BookingServiceItem } from './types/hotel';
 import { loadStoredData, saveStoredData, resetToDefaults } from './utils/storage';
 import { addDaysToDateStr, getMonthBounds, getMonthKey } from './utils/pricing';
-import { googleSignIn, initAuth, logout } from './utils/firebase';
+import { SHARED_HOTEL_ID } from './utils/firebase';
 import {
   ensureCloudWorkspaceInitialized,
   pushAllLocalDataToCloud,
@@ -34,11 +33,10 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'rooms' | 'ota' | 'bookings' | 'analytics'>('rooms');
   const [selectedGridMonth, setSelectedGridMonth] = useState<string>(() => getMonthKey(''));
 
-  // Firebase Cloud Auth & Sync State
-  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  // Always-on Shared Firebase Cloud Sync State
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
-  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
   const [syncRetryTick, setSyncRetryTick] = useState(0);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
@@ -85,39 +83,26 @@ export default function App() {
     }
   }, [rooms, bookings, settings, dataLoaded]);
 
-  // 1. Track Firebase Auth state continuously
+  // Immediately connect & subscribe to shared Firestore workspace on boot (no login required)
   useEffect(() => {
-    const unsubAuth = initAuth((authUser) => {
-      setCloudUser(authUser);
-    });
-    return () => {
-      unsubAuth();
-    };
-  }, []);
-
-  // 2. Immediately initialize & subscribe to Firestore whenever cloudUser is signed in and local data is loaded
-  useEffect(() => {
-    if (!dataLoaded || !cloudUser?.uid) {
-      setIsSyncingCloud(false);
-      return;
-    }
+    if (!dataLoaded) return;
 
     let active = true;
     let unsubFirestore: (() => void) | null = null;
-    const hotelId = cloudUser.uid;
 
     setCloudError(null);
     setIsSyncingCloud(true);
 
     ensureCloudWorkspaceInitialized(
-      hotelId,
+      SHARED_HOTEL_ID,
       roomsRef.current,
       bookingsRef.current,
       settingsRef.current
     )
       .then(() => {
         if (!active) return;
-        unsubFirestore = subscribeWorkspace(hotelId, {
+        setIsCloudConnected(true);
+        unsubFirestore = subscribeWorkspace(SHARED_HOTEL_ID, {
           onSettings: (cloudSettings) => {
             setSettings(cloudSettings);
           },
@@ -129,11 +114,15 @@ export default function App() {
           onBookings: (cloudBookings) => {
             setBookings(cloudBookings);
           },
-          onError: (msg) => setCloudError(msg),
+          onError: (msg) => {
+            setIsCloudConnected(false);
+            setCloudError(msg);
+          },
         });
       })
       .catch((err) => {
         if (!active) return;
+        setIsCloudConnected(false);
         setCloudError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
@@ -144,7 +133,7 @@ export default function App() {
       active = false;
       if (unsubFirestore) unsubFirestore();
     };
-  }, [cloudUser?.uid, dataLoaded, syncRetryTick]);
+  }, [dataLoaded, syncRetryTick]);
 
   if (!dataLoaded) {
     return (
@@ -235,30 +224,12 @@ export default function App() {
     setCloudError(err instanceof Error ? err.message : String(err));
   };
 
-  const handleSignInGoogle = async () => {
-    setCloudError(null);
-    setIsConnectingGoogle(true);
-    try {
-      const signedInUser = await googleSignIn();
-      setCloudUser(signedInUser);
-    } catch (err) {
-      reportCloudError(err);
-      throw err;
-    } finally {
-      setIsConnectingGoogle(false);
-    }
-  };
-
-  const handleSignOutGoogle = async () => {
-    await logout();
-    setCloudUser(null);
-  };
-
   const handlePushLocalToCloud = async () => {
-    if (!cloudUser) return;
     setIsSyncingCloud(true);
     try {
-      await pushAllLocalDataToCloud(cloudUser.uid, rooms, bookings, settings);
+      await pushAllLocalDataToCloud(SHARED_HOTEL_ID, rooms, bookings, settings);
+      setIsCloudConnected(true);
+      setCloudError(null);
     } finally {
       setIsSyncingCloud(false);
     }
@@ -266,16 +237,12 @@ export default function App() {
 
   const handleUpdateSettings = (updatedSettings: HotelSettings) => {
     setSettings(updatedSettings);
-    if (cloudUser) {
-      syncWorkspaceSettingsToCloud(cloudUser.uid, updatedSettings).catch(reportCloudError);
-    }
+    syncWorkspaceSettingsToCloud(SHARED_HOTEL_ID, updatedSettings).catch(reportCloudError);
   };
 
   const handleUpdateRooms = (updatedRooms: Room[]) => {
     setRooms(updatedRooms);
-    if (cloudUser) {
-      syncRoomsToCloud(cloudUser.uid, updatedRooms).catch(reportCloudError);
-    }
+    syncRoomsToCloud(SHARED_HOTEL_ID, updatedRooms).catch(reportCloudError);
   };
 
   const handleSaveBooking = (newBooking: Booking, targetRoomId: string, isCheckInNow: boolean) => {
@@ -312,14 +279,12 @@ export default function App() {
     });
     setRooms(updatedRooms);
 
-    if (cloudUser) {
-      const targetRoom = updatedRooms.find((r) => r.id === targetRoomId);
-      syncBookingAndRoomsToCloud(
-        cloudUser.uid,
-        newBooking,
-        targetRoom ? [targetRoom] : []
-      ).catch(reportCloudError);
-    }
+    const targetRoom = updatedRooms.find((r) => r.id === targetRoomId);
+    syncBookingAndRoomsToCloud(
+      SHARED_HOTEL_ID,
+      newBooking,
+      targetRoom ? [targetRoom] : []
+    ).catch(reportCloudError);
   };
 
   const handleUpdateBooking = (
@@ -352,10 +317,8 @@ export default function App() {
 
     setRooms(updatedRooms);
 
-    if (cloudUser) {
-      const changedRooms = updatedRooms.filter((r) => r.id === oldRoomId || r.id === newRoomId);
-      syncBookingAndRoomsToCloud(cloudUser.uid, updatedBooking, changedRooms).catch(reportCloudError);
-    }
+    const changedRooms = updatedRooms.filter((r) => r.id === oldRoomId || r.id === newRoomId);
+    syncBookingAndRoomsToCloud(SHARED_HOTEL_ID, updatedBooking, changedRooms).catch(reportCloudError);
   };
 
   const handleCheckInReservation = (bookingId: string, roomId: string) => {
@@ -382,16 +345,14 @@ export default function App() {
     );
     setRooms(updatedRooms);
 
-    if (cloudUser) {
-      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
-      const targetRoom = updatedRooms.find((r) => r.id === roomId);
-      if (targetBooking) {
-        syncBookingAndRoomsToCloud(
-          cloudUser.uid,
-          targetBooking,
-          targetRoom ? [targetRoom] : []
-        ).catch(reportCloudError);
-      }
+    const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+    const targetRoom = updatedRooms.find((r) => r.id === roomId);
+    if (targetBooking) {
+      syncBookingAndRoomsToCloud(
+        SHARED_HOTEL_ID,
+        targetBooking,
+        targetRoom ? [targetRoom] : []
+      ).catch(reportCloudError);
     }
   };
 
@@ -418,16 +379,14 @@ export default function App() {
       setSelectedRoomDetail(targetRoom);
     }
 
-    if (cloudUser) {
-      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
-      const targetRoom = updatedRooms.find((r) => r.id === roomId);
-      if (targetBooking) {
-        syncBookingAndRoomsToCloud(
-          cloudUser.uid,
-          targetBooking,
-          targetRoom ? [targetRoom] : []
-        ).catch(reportCloudError);
-      }
+    const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+    const targetRoom = updatedRooms.find((r) => r.id === roomId);
+    if (targetBooking) {
+      syncBookingAndRoomsToCloud(
+        SHARED_HOTEL_ID,
+        targetBooking,
+        targetRoom ? [targetRoom] : []
+      ).catch(reportCloudError);
     }
   };
 
@@ -457,11 +416,9 @@ export default function App() {
     );
     setBookings(updatedBookings);
 
-    if (cloudUser) {
-      const targetBooking = updatedBookings.find((b) => b.id === payload.bookingId);
-      if (targetBooking) {
-        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
-      }
+    const targetBooking = updatedBookings.find((b) => b.id === payload.bookingId);
+    if (targetBooking) {
+      syncBookingToCloud(SHARED_HOTEL_ID, targetBooking).catch(reportCloudError);
     }
   };
 
@@ -516,16 +473,14 @@ export default function App() {
       setIsRoomDetailOpen(false);
     }
 
-    if (cloudUser) {
-      const completedBooking = updatedBookings.find((b) => b.id === bookingId);
-      const updatedRoom = updatedRooms.find((r) => r.id === roomId);
-      if (completedBooking) {
-        syncBookingAndRoomsToCloud(
-          cloudUser.uid,
-          completedBooking,
-          updatedRoom ? [updatedRoom] : []
-        ).catch(reportCloudError);
-      }
+    const completedBooking = updatedBookings.find((b) => b.id === bookingId);
+    const updatedRoom = updatedRooms.find((r) => r.id === roomId);
+    if (completedBooking) {
+      syncBookingAndRoomsToCloud(
+        SHARED_HOTEL_ID,
+        completedBooking,
+        updatedRoom ? [updatedRoom] : []
+      ).catch(reportCloudError);
     }
   };
 
@@ -544,11 +499,9 @@ export default function App() {
     });
     setRooms(updatedRooms);
 
-    if (cloudUser) {
-      const targetRoom = updatedRooms.find((r) => r.id === roomId);
-      if (targetRoom) {
-        syncRoomsToCloud(cloudUser.uid, [targetRoom]).catch(reportCloudError);
-      }
+    const targetRoom = updatedRooms.find((r) => r.id === roomId);
+    if (targetRoom) {
+      syncRoomsToCloud(SHARED_HOTEL_ID, [targetRoom]).catch(reportCloudError);
     }
   };
 
@@ -579,11 +532,9 @@ export default function App() {
     });
     setRooms(updatedRooms);
 
-    if (cloudUser) {
-      const targetRoom = updatedRooms.find((r) => r.id === roomId);
-      if (targetRoom) {
-        syncRoomsToCloud(cloudUser.uid, [targetRoom]).catch(reportCloudError);
-      }
+    const targetRoom = updatedRooms.find((r) => r.id === roomId);
+    if (targetRoom) {
+      syncRoomsToCloud(SHARED_HOTEL_ID, [targetRoom]).catch(reportCloudError);
     }
   };
 
@@ -602,11 +553,9 @@ export default function App() {
     });
     setBookings(updatedBookings);
 
-    if (cloudUser) {
-      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
-      if (targetBooking) {
-        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
-      }
+    const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+    if (targetBooking) {
+      syncBookingToCloud(SHARED_HOTEL_ID, targetBooking).catch(reportCloudError);
     }
   };
 
@@ -620,11 +569,9 @@ export default function App() {
     });
     setBookings(updatedBookings);
 
-    if (cloudUser) {
-      const targetBooking = updatedBookings.find((b) => b.id === bookingId);
-      if (targetBooking) {
-        syncBookingToCloud(cloudUser.uid, targetBooking).catch(reportCloudError);
-      }
+    const targetBooking = updatedBookings.find((b) => b.id === bookingId);
+    if (targetBooking) {
+      syncBookingToCloud(SHARED_HOTEL_ID, targetBooking).catch(reportCloudError);
     }
   };
 
@@ -639,11 +586,9 @@ export default function App() {
     setIsExtendModalOpen(false);
     setIsBookingModalOpen(false);
 
-    if (cloudUser) {
-      pushAllLocalDataToCloud(cloudUser.uid, data.rooms, data.bookings, data.settings).catch(
-        reportCloudError
-      );
-    }
+    pushAllLocalDataToCloud(SHARED_HOTEL_ID, data.rooms, data.bookings, data.settings).catch(
+      reportCloudError
+    );
   };
 
   const currentRoomDetail = selectedRoomDetail
@@ -685,63 +630,30 @@ export default function App() {
         onChangeView={setCurrentView}
         settings={settings}
         rooms={rooms}
-        isCloudConnected={Boolean(cloudUser)}
+        isCloudConnected={isCloudConnected}
         isSyncingCloud={isSyncingCloud}
-        cloudEmail={cloudUser?.email}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {!cloudUser && (
-          <div className="mb-4 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-            <div className="text-xs text-slate-700">
-              <strong className="text-indigo-950 font-extrabold">
-                Đồng bộ Firebase Cloud:
-              </strong>{' '}
-              Đăng nhập Google để đồng bộ trực tiếp 25 phòng, đơn đặt phòng và cài đặt giữa các thiết bị.
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  handleSignInGoogle().catch(() => {});
-                }}
-                disabled={isConnectingGoogle}
-                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors disabled:opacity-60 cursor-pointer"
-              >
-                {isConnectingGoogle ? 'Đang kết nối Firebase...' : 'Kết Nối & Đồng Bộ Firebase Ngay'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsSyncModalOpen(true)}
-                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
-              >
-                Xuất Excel (.csv)
-              </button>
-            </div>
-          </div>
-        )}
-
         {cloudError && (
           <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-900">
             <span className="break-words">
               <strong>Lỗi đồng bộ Firebase:</strong> {cloudError}
             </span>
             <div className="flex items-center gap-2 shrink-0">
-              {cloudUser && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCloudError(null);
-                    setSyncRetryTick((n) => n + 1);
-                  }}
-                  className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold cursor-pointer"
-                >
-                  Thử lại
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setCloudError(null);
+                  setSyncRetryTick((n) => n + 1);
+                }}
+                className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold cursor-pointer"
+              >
+                Thử lại
+              </button>
               <button
                 type="button"
                 onClick={() => setCloudError(null)}
@@ -885,13 +797,15 @@ export default function App() {
       <SyncExportModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
-        user={cloudUser}
+        isCloudConnected={isCloudConnected}
         isSyncingCloud={isSyncingCloud}
         cloudError={cloudError}
         bookings={bookings}
-        onSignInGoogle={handleSignInGoogle}
-        onSignOutGoogle={handleSignOutGoogle}
         onPushLocalToCloud={handlePushLocalToCloud}
+        onRetryConnection={() => {
+          setCloudError(null);
+          setSyncRetryTick((n) => n + 1);
+        }}
       />
     </div>
   );
